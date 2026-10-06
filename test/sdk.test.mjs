@@ -318,6 +318,37 @@ for (const [cls, members, campos] of [
   });
 }
 
+test('lo que exporta el módulo está en su tabla (MODULE_MEMBERS), y la tabla no inventa nada', () => {
+  const real = new Set(Object.keys(sdk));
+  const doc = new Set(sdk.MODULE_MEMBERS.flatMap(([sig]) => memberNames(sig).map((m) => m.name)));
+  for (const k of real) assert.ok(doc.has(k), `el módulo exporta ${k}, que no está en MODULE_MEMBERS`);
+  for (const k of doc) assert.ok(real.has(k), `MODULE_MEMBERS documenta "${k}", que el módulo no exporta`);
+});
+
+test('lo que devuelve el adaptador de three está en su tabla (VIEW_MEMBERS), y la tabla no inventa nada', async () => {
+  // el adaptador importa three, que no está en Node: se lee lo que devuelve de su código
+  const { readFile } = await import('node:fs/promises');
+  const { VIEW_MEMBERS } = await import('../adapters/three/members.js');
+  const src = await readFile(new URL('../adapters/three/viewer.js', import.meta.url), 'utf8');
+  const bloque = /\n  return \{\n([\s\S]*?)\n  \};\n\}/.exec(src);
+  assert.ok(bloque, 'no encontré el return de createThreeView');
+  const real = new Set([...bloque[1].matchAll(/^    ([A-Za-z_$][\w$]*)\s*(?:[:(,]|$)/gm)].map((m) => m[1]));
+  const doc = new Set(VIEW_MEMBERS.flatMap(([sig]) => memberNames(sig).map((m) => m.name)).filter((n) => n !== 'createThreeView'));
+  assert.ok(real.size >= 5);
+  assert.deepEqual([...real].sort(), [...doc].sort());
+  assert.match(src, /export function createThreeView\(/);
+});
+
+test('la referencia de la API (docs/) está al día: si falla, npm run docs', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { buildMarkdown, buildHtml } = await import('../scripts/docs.mjs');
+  const leer = (f) => readFile(new URL(`../docs/${f}`, import.meta.url), 'utf8');
+  assert.equal(await leer('API.md'), buildMarkdown(), 'docs/API.md quedó atrás del código: npm run docs');
+  assert.equal(await leer('index.html'), buildHtml(), 'docs/index.html quedó atrás del código: npm run docs');
+  const md = buildMarkdown();
+  for (const c of ['createWorkshop', 'addPiece', 'cutList', 'Joint', 'thicknessAt', 'createThreeView', 'TOLERANCE_PRESETS']) assert.ok(md.includes(c), `falta ${c}`);
+});
+
 test('help() del taller está completa y no inventa nada', () => {
   const t = createWorkshop();
   const real = new Set(Object.keys(t));

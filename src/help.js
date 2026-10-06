@@ -26,12 +26,14 @@ export function memberNames(sig) {
 }
 
 /**
- * Imprime la tabla de miembros y la devuelve.
+ * Imprime la tabla de miembros y la devuelve (con su título en `rows.title`, que no se
+ * enumera: es lo que usa el generador de la referencia, scripts/docs.mjs).
  * @param {string} title @param {Member[]} members @param {{ print?: boolean }} [opts]
- * @returns {{ member: string, description: string }[]}
+ * @returns {{ member: string, description: string }[] & { readonly title?: string }}
  */
 export function help(title, members, { print = true } = {}) {
   const rows = members.map(([sig, doc]) => ({ member: sig, description: doc }));
+  Object.defineProperty(rows, 'title', { value: title });
   if (print) {
     console.log(`%c${title}`, 'font-weight:700;color:#a84a1f;font-size:12px');
     console.table(rows);

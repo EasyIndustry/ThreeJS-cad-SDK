@@ -25,6 +25,10 @@ taller.help();             // todo lo que hay
   lo único que importa three, y es opcional.
 - **Sin dependencias.** Ni de ejecución ni de build. three es *peer* y solo para el adaptador.
 
+**Referencia de la API:** [con buscador](https://easyindustry.github.io/ThreeJS-cad-SDK/)
+(`docs/index.html`) o en [Markdown](docs/API.md). Cada clase, cada método y cada valor
+exportado, generados desde las mismas tablas de `help()`: no pueden quedar atrás del código.
+
 ## Estructura
 
 ```
@@ -36,6 +40,8 @@ src/                 el núcleo: modelo, marcos, geometría, contacto. Puro.
   contact.js         contacto e intersección entre cajas orientadas
   help.js            help(): la ayuda de cada clase
 adapters/three/      el visor para three (opcional)
+docs/                la referencia de la API (generada: npm run docs)
+scripts/docs.mjs     el generador de docs/
 examples/demo.js     un bastidor con una diagonal, ensamblado, girado y repetido
 test/                las pruebas, en Node
 ```
@@ -558,8 +564,9 @@ const e = taller.assemble([cubo, otro], { name: 'Marco' });
 e.duplicate().move([0, 0, 80]);
 ```
 
-Las medidas son números en la unidad del documento (ver [Unidades y tolerancias](#unidades-y-tolerancias)); los ángulos, en grados. Lo completo de cada clase está en su `help()`, que es la
-fuente de verdad (y está verificada): `taller.help()`, `Piece.help()`, `Assembly.help()`,
+Las medidas son números en la unidad del documento (ver [Unidades y tolerancias](#unidades-y-tolerancias)); los ángulos, en grados. Lo completo está en la
+[referencia de la API](https://easyindustry.github.io/ThreeJS-cad-SDK/) y, desde el código, en
+el `help()` de cada clase, que es la fuente de verdad (y está verificada): `taller.help()`, `Piece.help()`, `Assembly.help()`,
 `Point3d.help()`, `Vector3d.help()`, `Line.help()`, `BoundingBox.help()`, `Face.help()`,
 `Transform.help()`, `Joint.help()`, `Fixing.help()`, `Link.help()`.
 

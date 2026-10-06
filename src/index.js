@@ -1839,3 +1839,29 @@ export const WORKSHOP_MEMBERS = [
   ['Point3d  Vector3d  Line  BoundingBox  Face  Transform  Contact  Intersection  Mesh', 'las clases de valores, a mano'],
   ['help()', 'esta tabla'],
 ];
+
+/**
+ * Lo que exporta el módulo (`import { … } from 'threejs-cad-sdk'`). Una prueba exige que cada
+ * export esté acá y que cada entrada exista; de esta tabla y de las de cada clase sale la
+ * referencia de la API (docs/).
+ * @type {Member[]}
+ */
+export const MODULE_MEMBERS = [
+  ['createWorkshop({ units?, tolerances?, historyLimit?, kernel?, sections? })', "un documento nuevo (el Workshop): la puerta de entrada a todo. units: 'mm' | 'cm' | 'm' | 'in' | 'ft' (cm); tolerances pisa las sugeridas; historyLimit, cuántos pasos se deshacen (100); kernel { intersect, subtract } para mallas más limpias; sections, perfiles propios. También acepta un Model ya armado"],
+  ['Part  Piece  Assembly', 'las partes del documento: Part es lo común, Piece una pieza (lo que se corta), Assembly un conjunto de partes. No se construyen a mano: salen del Workshop'],
+  ['Relation  Joint  Fixing  Link', 'las relaciones entre partes: Relation es lo común; Joint una junta (bisagra o corredera), Fixing una unión, Link un vínculo. Salen del Workshop'],
+  ['Point3d  Vector3d  Line  BoundingBox  Face  Transform  Contact  Intersection  Mesh', 'las clases de valores: inmutables, sin identidad. Lo que se consulta de una parte'],
+  ['sameFeature(a, b)', '¿dos resultados de closest() son el mismo rasgo de la misma pieza? (para no redibujar mientras el cursor sigue sobre lo mismo)'],
+  ['arrayTransforms(spec, { origin? })', "las transformaciones de una matriz lineal, en área o polar ({ type: 'linear' | 'area' | 'polar', count, … }); la 0 es la identidad"],
+  ['convertLength(value, from, to)', 'llevar una medida de una unidad a otra'],
+  ['tolerancesFor(unit, overrides?)', 'las tolerancias sugeridas para una unidad, con lo que se pise: { touch, penetration, grab, snap, minLength }'],
+  ['UNITS', 'las unidades que se pueden usar, con su sistema y cuántos mm miden'],
+  ['TOLERANCE_PRESETS', 'las tolerancias sugeridas de cada sistema, en su unidad natural (las lleva a la del documento tolerancesFor)'],
+  ['GRAB_RATIO', 'la franja del agarre en cada eje de una pieza no pasa de esta proporción de su largo'],
+  ['OPERATION_KINDS', 'las operaciones que se le pueden hacer al bruto de una pieza'],
+  ['SECTIONS', 'las secciones de perfil que trae el SDK: { nombre: (params, ancho, alto) => sección }'],
+  ['RELATION_KINDS', 'los tipos de relación que el SDK pone en orden'],
+  ['JOINT_TYPES', 'los tipos de junta'],
+  ['WORKSHOP_MEMBERS', 'la tabla de lo que tiene un Workshop (la que imprime taller.help())'],
+  ['MODULE_MEMBERS', 'esta tabla'],
+];

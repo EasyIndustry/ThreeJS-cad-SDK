@@ -48,9 +48,13 @@ Toda clase de geometría cumple esto, y las pruebas lo hacen cumplir:
 La regla: **una feature entra primero al modelo y después a la API.**
 
 1. En `src/model.js` (o un módulo de `src/`), con su prueba en `test/sdk.test.mjs`, en Node.
-2. Expuesta en `src/index.js` o `src/geometry.js`, con su línea en la tabla de `help()`.
+2. Expuesta en `src/index.js` o `src/geometry.js`, con su línea en la tabla de `help()` (lo
+   que exporta el módulo, en `MODULE_MEMBERS`; lo que devuelve el adaptador, en
+   `adapters/three/members.js`).
 3. Si se dibuja distinto, en `adapters/three/viewer.js` — que no decide nada: espeja, y no
    conoce materiales ni catálogos de ninguna app (ver "Agnóstico" arriba).
+4. `npm run docs`: regenera la referencia de la API (`docs/API.md` y `docs/index.html`) desde
+   esas tablas. No se edita a mano, y una prueba falla si quedó atrás del código.
 
 El tipado se verifica con `npm run typecheck`, en modo estricto. Los tipos van en JSDoc: los
 archivos siguen siendo `.js` y no hay paso de build.
@@ -83,8 +87,8 @@ frena si eso cambia: el núcleo lo puede usar un servidor.
 
 ### Publicar un pre-release
 
-1. `package.json` dice la versión del rc (`0.6.0-rc.1`), y `CHANGELOG.md` tiene su entrada
-   (lo que rompe, arriba de todo).
+1. `package.json` dice la versión del rc (`0.6.0-rc.1`), `CHANGELOG.md` tiene su entrada
+   (lo que rompe, arriba de todo) y `npm run docs` está corrido.
 2. `test` apunta a ese commit.
 3. ```bash
    gh release create v0.6.0-rc.1 --prerelease --target <sha completo> --title v0.6.0-rc.1 --notes-file <notas>
@@ -96,6 +100,13 @@ frena si eso cambia: el núcleo lo puede usar un servidor.
 
 1. PR de `test` a `main`, mergeado **con merge commit o fast-forward, nunca squash**: los tags
    de los rc tienen que seguir apuntando a commits que estén en `main`.
-2. En `main`, un commit de release: `package.json` pasa a `X.Y.Z` (sin `-rc.N`) y la entrada
-   del CHANGELOG toma la fecha del release.
+2. En `main`, un commit de release: `package.json` pasa a `X.Y.Z` (sin `-rc.N`), la entrada
+   del CHANGELOG toma la fecha del release y `npm run docs` (la referencia dice la versión).
 3. `gh release create vX.Y.Z --target <sha completo del commit de release> --notes-file <notas>`.
+
+### La referencia en GitHub Pages
+
+`docs/` se publica con GitHub Pages desde `main` (Settings → Pages → Deploy from a branch →
+`main`, carpeta `/docs`), en https://easyindustry.github.io/ThreeJS-cad-SDK/. Como sale de
+`main`, muestra la API del último release, no la de lo que se está probando en `test`.
+

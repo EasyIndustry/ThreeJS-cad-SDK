@@ -13,7 +13,8 @@
   "files": ["src", "adapters", "examples", "LICENSE", "README.md"],
   "scripts": {
     "test": "node --test",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "docs": "node scripts/docs.mjs"
   },
   "peerDependencies": { "three": ">=0.160.0" },
   "peerDependenciesMeta": { "three": { "optional": true } },

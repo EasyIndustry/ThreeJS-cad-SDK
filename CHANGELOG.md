@@ -96,6 +96,10 @@ torneados y su geometría), [#8](https://github.com/EasyIndustry/ThreeJS-cad-SDK
   anclada mueve, dos estiran, en cascada y en el mismo paso de deshacer. `link.setGap(gap)`.
 - Despiece: `taller.cutList({ groupBy? })`, con filas
   `{ stock, material, length, width, thickness, count, ids, fixings }`.
+- Referencia de la API: `docs/index.html` (con buscador, para GitHub Pages) y `docs/API.md`,
+  generadas por `npm run docs` desde las tablas de `help()`. Una prueba falla si quedan atrás
+  del código. `MODULE_MEMBERS` documenta lo que exporta el módulo, y
+  `adapters/three/members.js` lo que devuelve `createThreeView`, con sus pruebas.
 
 ### Changed
 
