@@ -82,6 +82,8 @@ import { DEFAULT_UNIT, checkUnit } from './units.js';
 /** Lo que se ve de una parte: una pieza o un ensamble (una instancia se ve como lo que copia). @typedef {PieceDef | AssemblyDef} PartDef */
 /** Lo que se guarda. @typedef {PieceDef | AssemblyDef | InstanceDef} StoredPart */
 
+/** Una foto del documento, para deshacer: sus partes y sus contadores de ids. @typedef {{ parts: Map<string, StoredPart>, counters: Record<string, number> }} Foto */
+
 /** @typedef {{ min: Vec3, max: Vec3, size: Vec3, center: Vec3 }} Box */
 /** @typedef {{ axis: 0 | 1 | 2, side: 1 | -1, normal: Vec3, corners: Vec3[], center: Vec3 }} Face */
 
@@ -92,6 +94,15 @@ export function axesBySize(size) {
 }
 
 const clone = (/** @type {any} */ v) => JSON.parse(JSON.stringify(v));
+
+/** Congela un registro entero, para que nadie lo toque por la espalda. @template T @param {T} o @returns {T} */
+function deepFreeze(o) {
+  if (o && typeof o === 'object' && !Object.isFrozen(o)) {
+    Object.freeze(o);
+    for (const v of Object.values(o)) deepFreeze(v);
+  }
+  return o;
+}
 
 const PREFIJO = /** @type {const} */ ({ piece: 'P', assembly: 'E', instance: 'I' });
 
@@ -131,8 +142,23 @@ function validate(parts) {
 }
 
 export class Model {
-  /** @param {{ units?: Unit }} [opts] `units`: la unidad del documento (cm si no se dice) */
-  constructor({ units = DEFAULT_UNIT } = {}) {
+  /** @type {Foto[]} */
+  #pasos = [];
+  /** @type {Foto[]} */
+  #rehacer = [];
+  #nivel = 0;
+  /** @type {Foto | null} */
+  #inicio = null;
+
+  /**
+   * @param {{ units?: Unit, historyLimit?: number }} [opts]
+   *   `units`: la unidad del documento (cm si no se dice).
+   *   `historyLimit`: cuántos pasos se pueden deshacer (100 si no se dice; 0: no se guarda historial).
+   */
+  constructor({ units = DEFAULT_UNIT, historyLimit = 100 } = {}) {
+    if (!Number.isInteger(historyLimit) || historyLimit < 0) throw new TypeError(`historyLimit inválido: ${String(historyLimit)} (va un entero de 0 o más)`);
+    /** Cuántos pasos se guardan para deshacer. */
+    this.historyLimit = historyLimit;
     /** La unidad en que están todas las medidas del documento. @type {Unit} */
     this.units = checkUnit(units);
     /** @type {Map<string, StoredPart>} */
@@ -442,6 +468,166 @@ export class Model {
     return isQuarterTurn(this.worldFrame(id).r);
   }
 
+  // ---------- cambiar: lo guardado no se toca, se reemplaza ----------
+  // Los registros guardados son inmutables (están congelados): un cambio pone un registro nuevo
+  // en el lugar del viejo. Así una "foto" del documento es copiar el Map —los registros se
+  // comparten, no se clonan— y deshacer es volver a una foto.
+
+  /** @param {StoredPart} rec */
+  #put(rec) {
+    this.parts.set(rec.id, deepFreeze(rec));
+  }
+
+  /** @param {string} id @param {Record<string, unknown>} cambios */
+  #patch(id, cambios) {
+    this.#put(/** @type {StoredPart} */ ({ ...this.own(id), ...cambios }));
+  }
+
+  // ---------- deshacer ----------
+  // Cada operación es un paso. Para que varias valgan un solo paso (un arrastre son cien
+  // `move`) se agrupan con begin() … commit(), o con transaction(fn). Una operación que falla
+  // a medias no deja nada hecho, y rollback() cancela todo lo de una transacción abierta.
+
+  /** @returns {Foto} */
+  #foto() {
+    return { parts: new Map(this.parts), counters: { ...this.counters } };
+  }
+
+  /** @param {Foto} f */
+  #volver(f) {
+    this.parts = new Map(f.parts);
+    this.counters = { ...f.counters };
+  }
+
+  /** Los ids que cambian entre dos documentos: los que están en uno y no en el otro, o distintos. @param {Map<string, StoredPart>} a @param {Map<string, StoredPart>} b */
+  #diferencias(a, b) {
+    /** @type {string[]} */
+    const out = [];
+    for (const [id, rec] of a) if (b.get(id) !== rec) out.push(id);
+    for (const id of b.keys()) if (!a.has(id)) out.push(id);
+    return out;
+  }
+
+  /** ¿El documento es el de la foto? @param {Foto} f */
+  #igual(f) {
+    const ks = new Set([...Object.keys(f.counters), ...Object.keys(this.counters)]);
+    return this.#diferencias(this.parts, f.parts).length === 0 && [...ks].every((k) => (f.counters[k] ?? 0) === (this.counters[k] ?? 0));
+  }
+
+  /** Vuelve a una foto y avisa qué cambió. @param {Foto} f @param {string} tipo */
+  #restaurar(f, tipo) {
+    const ids = this.#diferencias(this.parts, f.parts);
+    this.#volver(f);
+    if (ids.length) this.emit(tipo, ids);
+  }
+
+  /** Cierra el paso que se abrió: si cambió algo, queda para deshacer. */
+  #cerrar() {
+    const inicio = this.#inicio;
+    this.#inicio = null;
+    if (!inicio || this.#igual(inicio)) return;
+    this.#pasos.push(inicio);
+    this.#rehacer.length = 0;
+    while (this.#pasos.length > this.historyLimit) this.#pasos.shift();
+  }
+
+  /**
+   * Una operación, como un paso de deshacer (o parte de la transacción abierta). Si falla, el
+   * documento queda como estaba antes de ella.
+   * @template T @param {() => T} fn @returns {T}
+   */
+  #paso(fn) {
+    const antes = this.#foto();
+    if (this.#nivel === 0) this.#inicio = antes;
+    this.#nivel++;
+    try {
+      return fn();
+    } catch (e) {
+      const ids = this.#diferencias(this.parts, antes.parts);
+      this.#volver(antes);
+      if (ids.length) this.emit('rollback', ids);
+      throw e;
+    } finally {
+      if (--this.#nivel === 0) this.#cerrar();
+    }
+  }
+
+  /** Abre una transacción: lo que se haga hasta commit() es un solo paso de deshacer. Se anidan: vale la de afuera. */
+  begin() {
+    if (this.#nivel === 0) this.#inicio = this.#foto();
+    this.#nivel++;
+  }
+
+  /** Cierra la transacción. Si no cambió nada, no queda ningún paso. */
+  commit() {
+    if (this.#nivel === 0) throw new Error('no hay una transacción abierta (begin)');
+    if (--this.#nivel === 0) this.#cerrar();
+  }
+
+  /** Cancela la transacción abierta (con todas las de adentro): el documento vuelve a como estaba en begin(). */
+  rollback() {
+    if (this.#nivel === 0) throw new Error('no hay una transacción abierta (begin)');
+    const inicio = /** @type {Foto} */ (this.#inicio);
+    this.#nivel = 0;
+    this.#inicio = null;
+    this.#restaurar(inicio, 'rollback');
+  }
+
+  /**
+   * Hace `fn` como un solo paso de deshacer. Si tira, el documento vuelve a como estaba.
+   * @template T @param {() => T} fn @returns {T}
+   */
+  transaction(fn) {
+    this.begin();
+    /** @type {T} */
+    let r;
+    try {
+      r = fn();
+    } catch (e) {
+      if (this.#nivel > 0) this.rollback();
+      throw e;
+    }
+    if (this.#nivel > 0) this.commit();
+    return r;
+  }
+
+  /** @param {string} que */
+  #sinTransaccion(que) {
+    if (this.#nivel) throw new Error(`hay una transacción abierta: se cierra (commit) o se cancela (rollback) antes de ${que}`);
+  }
+
+  /** ¿Hay algo para deshacer? */
+  get canUndo() { return this.#pasos.length > 0; }
+  /** ¿Hay algo para rehacer? */
+  get canRedo() { return this.#rehacer.length > 0; }
+
+  /** Vuelve al documento de antes del último paso. Devuelve false si no había nada para deshacer. */
+  undo() {
+    this.#sinTransaccion('deshacer');
+    const antes = this.#pasos.pop();
+    if (!antes) return false;
+    this.#rehacer.push(this.#foto());
+    this.#restaurar(antes, 'undo');
+    return true;
+  }
+
+  /** Vuelve a hacer lo último que se deshizo. Devuelve false si no había nada para rehacer. */
+  redo() {
+    this.#sinTransaccion('rehacer');
+    const despues = this.#rehacer.pop();
+    if (!despues) return false;
+    this.#pasos.push(this.#foto());
+    this.#restaurar(despues, 'redo');
+    return true;
+  }
+
+  /** Olvida lo que se puede deshacer y rehacer; el documento queda como está. */
+  clearHistory() {
+    this.#sinTransaccion('borrar el historial');
+    this.#pasos.length = 0;
+    this.#rehacer.length = 0;
+  }
+
   // ---------- crear ----------
 
   /** @param {'piece' | 'assembly' | 'instance'} kind */
@@ -462,17 +648,19 @@ export class Model {
     if (!Array.isArray(size) || size.length !== 3 || size.some((s) => !(s > 0))) {
       throw new Error(`medidas inválidas: ${JSON.stringify(size)} (van tres números > 0, en ${this.units})`);
     }
-    const id = this.nextId('piece');
-    /** @type {PieceDef} */
-    const p = {
-      kind: 'piece', id, name: name || `Pieza ${this.counters.piece}`, parent: null,
-      frame: frame(at, r), size: [...size], axes: axes ? checkAxes(axes) : axesBySize(size),
-      material, shape: shape ? clone(shape) : null,
-    };
-    this.parts.set(id, p);
-    if (parent) this.adopt(parent, [id], { keepWorld: false });
-    this.emit('add', [id]);
-    return id;
+    return this.#paso(() => {
+      const id = this.nextId('piece');
+      /** @type {PieceDef} */
+      const p = {
+        kind: 'piece', id, name: name || `Pieza ${this.counters.piece}`, parent: null,
+        frame: frame(at, r), size: [...size], axes: axes ? checkAxes(axes) : axesBySize(size),
+        material, shape: shape ? clone(shape) : null,
+      };
+      this.#put(p);
+      if (parent) this.adopt(parent, [id], { keepWorld: false });
+      this.emit('add', [id]);
+      return id;
+    });
   }
 
   /**
@@ -483,27 +671,28 @@ export class Model {
    */
   assemble(ids, { name } = {}) {
     if (!ids.length) throw new Error('no hay nada para ensamblar');
-    const parts = ids.map((id) => this.own(id));
-    const parent = parts[0].parent;
-    if (parts.some((p) => p.parent !== parent)) {
-      throw new Error('solo se ensamblan partes hermanas (que estén en el mismo ensamble, o sueltas)');
-    }
-    // el centro de lo que se junta, en el espacio del padre
-    const pw = this.parentWorld(parent);
-    const pts = ids.flatMap((id) => this.positions(id, 'world')).map((q) => apply(invert(pw), q));
-    const center = /** @type {Vec3} */ ([0, 1, 2].map((k) => (Math.min(...pts.map((q) => q[k])) + Math.max(...pts.map((q) => q[k]))) / 2));
-    const id = this.nextId('assembly');
-    /** @type {AssemblyDef} */
-    const a = { kind: 'assembly', id, name: name || `Ensamble ${this.counters.assembly}`, parent, frame: frame(center), children: [] };
-    this.parts.set(id, a);
-    if (parent) {
-      const pa = this.ownAssembly(parent);
-      pa.children = pa.children.filter((c) => !ids.includes(c));
-      pa.children.push(id);
-    }
-    this.adopt(id, ids, { keepWorld: true });
-    this.emit('assemble', [id, ...ids]);
-    return id;
+    return this.#paso(() => {
+      const parts = ids.map((id) => this.own(id));
+      const parent = parts[0].parent;
+      if (parts.some((p) => p.parent !== parent)) {
+        throw new Error('solo se ensamblan partes hermanas (que estén en el mismo ensamble, o sueltas)');
+      }
+      // el centro de lo que se junta, en el espacio del padre
+      const pw = this.parentWorld(parent);
+      const pts = ids.flatMap((id) => this.positions(id, 'world')).map((q) => apply(invert(pw), q));
+      const center = /** @type {Vec3} */ ([0, 1, 2].map((k) => (Math.min(...pts.map((q) => q[k])) + Math.max(...pts.map((q) => q[k]))) / 2));
+      const id = this.nextId('assembly');
+      /** @type {AssemblyDef} */
+      const a = { kind: 'assembly', id, name: name || `Ensamble ${this.counters.assembly}`, parent, frame: frame(center), children: [] };
+      this.#put(a);
+      if (parent) {
+        const pa = this.ownAssembly(parent);
+        this.#patch(parent, { children: [...pa.children.filter((c) => !ids.includes(c)), id] });
+      }
+      this.adopt(id, ids, { keepWorld: true });
+      this.emit('assemble', [id, ...ids]);
+      return id;
+    });
   }
 
   /**
@@ -512,16 +701,18 @@ export class Model {
    * @param {string} parentId @param {string[]} ids @param {{ keepWorld: boolean }} opts
    */
   adopt(parentId, ids, { keepWorld }) {
-    const pa = this.ownAssembly(parentId);
-    const inv = invert(this.worldFrame(parentId));
-    for (const id of ids) {
-      const p = this.own(id);
-      if (this.#alcance(id).has(parentId)) throw new Error(`${id} no puede quedar adentro de sí mismo`);
-      const w = this.worldFrame(id);
-      p.frame = keepWorld ? compose(inv, w) : p.frame;
-      p.parent = parentId;
-      if (!pa.children.includes(id)) pa.children.push(id);
-    }
+    this.#paso(() => {
+      this.ownAssembly(parentId);
+      const inv = invert(this.worldFrame(parentId));
+      for (const id of ids) {
+        const p = this.own(id);
+        if (this.#alcance(id).has(parentId)) throw new Error(`${id} no puede quedar adentro de sí mismo`);
+        const w = this.worldFrame(id);
+        this.#patch(id, { frame: keepWorld ? compose(inv, w) : p.frame, parent: parentId });
+        const pa = this.ownAssembly(parentId);
+        if (!pa.children.includes(id)) this.#patch(parentId, { children: [...pa.children, id] });
+      }
+    });
   }
 
   /**
@@ -555,37 +746,40 @@ export class Model {
 
   /** Deshace un ensamble: sus hijos pasan al padre, en el mismo lugar. @param {string} id */
   disassemble(id) {
-    const a = this.own(id);
-    if (a.kind === 'instance') throw new Error(`${id} es una instancia: se suelta con detach() y después se deshace`);
-    if (a.kind !== 'assembly') throw new Error(`${id} no es un ensamble`);
-    this.#sinDependientes([id]);
-    const kids = [...a.children];
-    for (const k of kids) {
-      const p = this.own(k);
-      p.frame = compose(a.frame, p.frame);
-      p.parent = a.parent;
-    }
-    if (a.parent) {
-      const pa = this.ownAssembly(a.parent);
-      pa.children = pa.children.flatMap((c) => (c === id ? kids : [c]));
-    }
-    this.parts.delete(id);
-    this.emit('disassemble', [id, ...kids]);
-    return kids;
+    return this.#paso(() => {
+      const a = this.own(id);
+      if (a.kind === 'instance') throw new Error(`${id} es una instancia: se suelta con detach() y después se deshace`);
+      if (a.kind !== 'assembly') throw new Error(`${id} no es un ensamble`);
+      this.#sinDependientes([id]);
+      const kids = [...a.children];
+      for (const k of kids) {
+        const p = this.own(k);
+        this.#patch(k, { frame: compose(a.frame, p.frame), parent: a.parent });
+      }
+      if (a.parent) {
+        const pa = this.ownAssembly(a.parent);
+        this.#patch(a.parent, { children: pa.children.flatMap((c) => (c === id ? kids : [c])) });
+      }
+      this.parts.delete(id);
+      this.emit('disassemble', [id, ...kids]);
+      return kids;
+    });
   }
 
   /** Borra una parte y todo lo que cuelga de ella. @param {string} id */
   remove(id) {
-    const p = this.own(id);
-    const guardadas = this.realSubtree(id);
-    this.#sinDependientes(guardadas);
-    const ids = this.subtree(id);
-    if (p.parent) {
-      const pa = this.ownAssembly(p.parent);
-      pa.children = pa.children.filter((c) => c !== id);
-    }
-    for (const k of guardadas) this.parts.delete(k);
-    this.emit('remove', ids);
+    this.#paso(() => {
+      const p = this.own(id);
+      const guardadas = this.realSubtree(id);
+      this.#sinDependientes(guardadas);
+      const ids = this.subtree(id);
+      if (p.parent) {
+        const pa = this.ownAssembly(p.parent);
+        this.#patch(p.parent, { children: pa.children.filter((c) => c !== id) });
+      }
+      for (const k of guardadas) this.parts.delete(k);
+      this.emit('remove', ids);
+    });
   }
 
   // ---------- instancias ----------
@@ -603,25 +797,27 @@ export class Model {
    * @returns {string} el id de la instancia
    */
   instantiate(srcId, { name, parent, placement } = {}) {
-    const src = this.own(srcId);
-    const base = src.kind === 'instance' ? this.#sourceOf(src) : src;
-    const dest = parent === undefined ? src.parent : parent;
-    if (dest !== null) {
-      this.ownAssembly(dest);
-      if (this.#alcance(base.id).has(dest)) throw new Error(`no se puede instanciar ${base.id} adentro de ${dest}: quedaría adentro de sí misma`);
-    }
-    const mundo = this.worldFrame(srcId);
-    const id = this.nextId('instance');
-    /** @type {InstanceDef} */
-    const inst = {
-      kind: 'instance', id, name: name || src.name, parent: dest,
-      frame: compose(invert(this.parentWorld(dest)), placement ? compose(placement, mundo) : mundo),
-      source: base.id,
-    };
-    this.parts.set(id, inst);
-    if (dest) this.ownAssembly(dest).children.push(id);
-    this.emit('add', [id]);
-    return id;
+    return this.#paso(() => {
+      const src = this.own(srcId);
+      const base = src.kind === 'instance' ? this.#sourceOf(src) : src;
+      const dest = parent === undefined ? src.parent : parent;
+      if (dest !== null) {
+        this.ownAssembly(dest);
+        if (this.#alcance(base.id).has(dest)) throw new Error(`no se puede instanciar ${base.id} adentro de ${dest}: quedaría adentro de sí misma`);
+      }
+      const mundo = this.worldFrame(srcId);
+      const id = this.nextId('instance');
+      /** @type {InstanceDef} */
+      const inst = {
+        kind: 'instance', id, name: name || src.name, parent: dest,
+        frame: compose(invert(this.parentWorld(dest)), placement ? compose(placement, mundo) : mundo),
+        source: base.id,
+      };
+      this.#put(inst);
+      if (dest) this.#patch(dest, { children: [...this.ownAssembly(dest).children, id] });
+      this.emit('add', [id]);
+      return id;
+    });
   }
 
   /**
@@ -631,37 +827,41 @@ export class Model {
    * @param {string} id
    */
   detach(id) {
-    const inst = this.own(id);
-    if (inst.kind !== 'instance') throw new Error(`${id} no es una instancia`);
-    const src = this.#sourceOf(inst);
-    const antes = this.subtree(id);
-    if (src.kind === 'piece') {
-      /** @type {PieceDef} */
-      const real = {
-        kind: 'piece', id, name: inst.name, parent: inst.parent, frame: clone(inst.frame),
-        size: [...src.size], axes: { ...src.axes }, material: src.material, shape: src.shape ? clone(src.shape) : null,
-      };
-      this.parts.set(id, real);
-    } else {
-      /** @type {AssemblyDef} */
-      const real = { kind: 'assembly', id, name: inst.name, parent: inst.parent, frame: clone(inst.frame), children: [] };
-      this.parts.set(id, real);
-      /** @type {Map<string, string>} */
-      const copias = new Map();
-      real.children = src.children.map((c) => this.#copiar(c, id, copias));
-      this.#remapear(copias);
-    }
-    this.emit('detach', [...new Set([...antes, ...this.subtree(id)])]);
+    this.#paso(() => {
+      const inst = this.own(id);
+      if (inst.kind !== 'instance') throw new Error(`${id} no es una instancia`);
+      const src = this.#sourceOf(inst);
+      const antes = this.subtree(id);
+      if (src.kind === 'piece') {
+        /** @type {PieceDef} */
+        const real = {
+          kind: 'piece', id, name: inst.name, parent: inst.parent, frame: clone(inst.frame),
+          size: [...src.size], axes: { ...src.axes }, material: src.material, shape: src.shape ? clone(src.shape) : null,
+        };
+        this.#put(real);
+      } else {
+        /** @type {AssemblyDef} */
+        const real = { kind: 'assembly', id, name: inst.name, parent: inst.parent, frame: clone(inst.frame), children: [] };
+        this.#put(real);
+        /** @type {Map<string, string>} */
+        const copias = new Map();
+        this.#patch(id, { children: src.children.map((c) => this.#copiar(c, id, copias)) });
+        this.#remapear(copias);
+      }
+      this.emit('detach', [...new Set([...antes, ...this.subtree(id)])]);
+    });
   }
 
   // ---------- colocar: solo tocan marcos, nunca una definición ----------
 
   /** Corre la parte `delta` (en la unidad del documento), medido en el mundo. @param {string} id @param {Vec3} delta */
   move(id, delta) {
-    const p = this.own(id);
-    const d = rotate(transpose3(this.parentWorld(p.parent).r), delta); // al espacio del padre
-    p.frame = { r: p.frame.r, t: [p.frame.t[0] + d[0], p.frame.t[1] + d[1], p.frame.t[2] + d[2]] };
-    this.emit('move', this.subtree(id));
+    this.#paso(() => {
+      const p = this.own(id);
+      const d = rotate(transpose3(this.parentWorld(p.parent).r), delta); // al espacio del padre
+      this.#patch(id, { frame: { r: p.frame.r, t: [p.frame.t[0] + d[0], p.frame.t[1] + d[1], p.frame.t[2] + d[2]] } });
+      this.emit('move', this.subtree(id));
+    });
   }
 
   /** Lleva el centro de la caja de la parte a `point`, en el mundo. @param {string} id @param {Vec3} point */
@@ -680,19 +880,21 @@ export class Model {
    * @param {{ pivot?: 'center' | 'origin' | Vec3, local?: boolean }} [opts]
    */
   rotate(id, axis, deg, { pivot = 'center', local = false } = {}) {
-    const p = this.own(id);
-    const w = this.worldFrame(id);
-    /** @type {Axis | Vec3} */
-    let ax = axis;
-    if (local) {
-      if (Array.isArray(axis)) throw new Error('con local: true el eje va como x, y o z de la pieza');
-      const k = axisIndex(axis);
-      ax = [w.r[k], w.r[3 + k], w.r[6 + k]]; // la columna k: el eje local, visto desde el mundo
-    }
-    const pv = pivot === 'center' ? this.box(id, 'world').center : pivot === 'origin' ? w.t : pivot;
-    const w2 = turn(w, ax, deg, pv);
-    p.frame = compose(invert(this.parentWorld(p.parent)), w2);
-    this.emit('rotate', this.subtree(id));
+    this.#paso(() => {
+      const p = this.own(id);
+      const w = this.worldFrame(id);
+      /** @type {Axis | Vec3} */
+      let ax = axis;
+      if (local) {
+        if (Array.isArray(axis)) throw new Error('con local: true el eje va como x, y o z de la pieza');
+        const k = axisIndex(axis);
+        ax = [w.r[k], w.r[3 + k], w.r[6 + k]]; // la columna k: el eje local, visto desde el mundo
+      }
+      const pv = pivot === 'center' ? this.box(id, 'world').center : pivot === 'origin' ? w.t : pivot;
+      const w2 = turn(w, ax, deg, pv);
+      this.#patch(id, { frame: compose(invert(this.parentWorld(p.parent)), w2) });
+      this.emit('rotate', this.subtree(id));
+    });
   }
 
   /**
@@ -701,22 +903,30 @@ export class Model {
    * @param {string} id @param {Frame} T
    */
   transform(id, T) {
-    const p = this.own(id);
-    p.frame = compose(invert(this.parentWorld(p.parent)), compose(T, this.worldFrame(id)));
-    this.emit('transform', this.subtree(id));
+    this.#paso(() => {
+      const p = this.own(id);
+      this.#patch(id, { frame: compose(invert(this.parentWorld(p.parent)), compose(T, this.worldFrame(id))) });
+      this.emit('transform', this.subtree(id));
+    });
   }
 
   /** @param {string} id @param {string} name */
   rename(id, name) {
     if (typeof name !== 'string' || !name.trim()) throw new Error('el nombre no puede estar vacío');
-    this.own(id).name = name.trim();
-    this.emit('rename', [id]);
+    this.#paso(() => {
+      this.own(id);
+      this.#patch(id, { name: name.trim() });
+      this.emit('rename', [id]);
+    });
   }
 
   /** @param {string} id @param {string} material */
   setMaterial(id, material) {
-    this.ownPiece(id).material = material;
-    this.emit('material', [id]);
+    this.#paso(() => {
+      this.ownPiece(id);
+      this.#patch(id, { material });
+      this.emit('material', [id]);
+    });
   }
 
   /**
@@ -725,10 +935,12 @@ export class Model {
    * @param {string} id @param {Vec3} size
    */
   resize(id, size) {
-    const p = this.ownPiece(id);
-    if (size.length !== 3 || size.some((s) => !(s > 0))) throw new Error(`medidas inválidas: ${JSON.stringify(size)}`);
-    p.size = [...size];
-    this.emit('resize', [id]);
+    this.#paso(() => {
+      this.ownPiece(id);
+      if (size.length !== 3 || size.some((s) => !(s > 0))) throw new Error(`medidas inválidas: ${JSON.stringify(size)}`);
+      this.#patch(id, { size: [...size] });
+      this.emit('resize', [id]);
+    });
   }
 
   /**
@@ -744,9 +956,9 @@ export class Model {
     n.id = nid;
     n.parent = parent;
     if (n.kind === 'assembly') n.children = [];
-    this.parts.set(nid, n);
+    this.#put(n);
     copias.set(srcId, nid);
-    if (src.kind === 'assembly') n.children = src.children.map((c) => this.#copiar(c, nid, copias));
+    if (src.kind === 'assembly') this.#patch(nid, { children: src.children.map((c) => this.#copiar(c, nid, copias)) });
     return nid;
   }
 
@@ -754,7 +966,7 @@ export class Model {
   #remapear(copias) {
     for (const nid of copias.values()) {
       const n = this.parts.get(nid);
-      if (n?.kind === 'instance' && copias.has(n.source)) n.source = /** @type {string} */ (copias.get(n.source));
+      if (n?.kind === 'instance' && copias.has(n.source)) this.#patch(nid, { source: copias.get(n.source) });
     }
   }
 
@@ -767,14 +979,16 @@ export class Model {
    * @param {string} id @returns {string} el id de la copia
    */
   duplicate(id) {
-    const src = this.own(id);
-    /** @type {Map<string, string>} */
-    const copias = new Map();
-    const nid = this.#copiar(id, src.parent, copias);
-    this.#remapear(copias);
-    if (src.parent) this.ownAssembly(src.parent).children.push(nid);
-    this.emit('add', this.subtree(nid));
-    return nid;
+    return this.#paso(() => {
+      const src = this.own(id);
+      /** @type {Map<string, string>} */
+      const copias = new Map();
+      const nid = this.#copiar(id, src.parent, copias);
+      this.#remapear(copias);
+      if (src.parent) this.#patch(src.parent, { children: [...this.ownAssembly(src.parent).children, nid] });
+      this.emit('add', this.subtree(nid));
+      return nid;
+    });
   }
 
   // ---------- guardar ----------
@@ -785,17 +999,21 @@ export class Model {
 
   /**
    * Carga un documento. La unidad es la del documento: uno guardado antes de que se guardara la
-   * unidad estaba en cm, que era lo único que había.
+   * unidad estaba en cm, que era lo único que había. Cargar un documento borra el historial
+   * (no se puede deshacer una carga).
    * @param {{ units?: Unit, counters: Record<string, number>, parts: StoredPart[] }} data
    */
   load(data) {
+    this.#sinTransaccion('cargar un documento');
     const units = checkUnit(data.units ?? 'cm');
-    const parts = new Map(data.parts.map((p) => [p.id, /** @type {StoredPart} */ (clone(p))]));
+    const parts = new Map(data.parts.map((p) => [p.id, /** @type {StoredPart} */ (deepFreeze(clone(p)))]));
     validate(parts);
     const ids = [...this.parts.keys()];
     this.units = units;
     this.parts = parts;
     this.counters = { piece: 0, assembly: 0, instance: 0, ...data.counters };
+    this.#pasos.length = 0; // un documento nuevo no tiene pasado
+    this.#rehacer.length = 0;
     this.emit('load', [...ids, ...this.parts.keys()]);
   }
 

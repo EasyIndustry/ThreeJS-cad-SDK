@@ -982,6 +982,210 @@ test('las tolerancias viven solo en config.js: el resto del SDK no las escribe a
   assert.ok(!('TOUCH' in sdk) && !('PEN' in sdk), 'ya no se exportan constantes de tolerancia en cm');
 });
 
+// ---------- deshacer y rehacer ----------
+// Cada operación es un paso; begin/commit (o transaction) agrupan varios en uno. Lo guardado
+// es inmutable, así que deshacer es volver a una foto del documento.
+
+const doc = (t) => JSON.stringify(t.toJSON());
+
+test('hacer N cosas y deshacer N veces deja el documento como al principio; rehacer N, como al final', () => {
+  const t = createWorkshop();
+  const inicio = doc(t);
+  const pasos = [
+    () => larguero(t, [0, 5, 0]),
+    () => larguero(t, [0, 5, 50]),
+    () => t.part('P-1').rotate(45, 'z'),
+    () => t.assemble(['P-1', 'P-2'], { name: 'Marco' }),
+    () => t.part('E-1').rotate(30, 'y'),
+    () => t.array('E-1', { type: 'linear', count: 3, direction: [1, 0, 0], distance: 400 }),
+    () => t.part('P-2').resize([180, 4, 10]),
+    () => t.part('I-1').detach(),
+    () => t.part('I-2').rename('Copia'),
+    () => t.part('E-1').duplicate(),
+    () => t.part('I-2').remove(),
+    () => t.part('P-1').setMaterial('otro'),
+  ];
+  const estados = [inicio];
+  for (const f of pasos) { f(); estados.push(doc(t)); }
+  for (let k = pasos.length; k > 0; k--) {
+    assert.equal(t.undo(), true);
+    assert.equal(doc(t), estados[k - 1], `después de deshacer el paso ${k}`);
+  }
+  assert.equal(t.undo(), false, 'no hay nada más para deshacer');
+  assert.equal(doc(t), inicio);
+  for (let k = 1; k <= pasos.length; k++) {
+    assert.equal(t.redo(), true);
+    assert.equal(doc(t), estados[k], `después de rehacer el paso ${k}`);
+  }
+  assert.equal(t.redo(), false);
+});
+
+test('una transacción con cien move() se deshace con un solo undo()', () => {
+  const t = createWorkshop();
+  const a = larguero(t);
+  const antes = doc(t);
+  t.transaction(() => { for (let i = 0; i < 100; i++) a.move([0.5, 0, 0]); });
+  cerca([a.boundingBox.center.x], [50]);
+  t.undo();
+  assert.equal(doc(t), antes);
+  assert.equal(t.canUndo, true, 'queda el paso de crear la pieza');
+  t.undo();
+  assert.equal(t.canUndo, false);
+});
+
+test('begin() … commit() agrupa aunque el gesto cruce varios eventos, y se anida', () => {
+  const t = createWorkshop();
+  const a = larguero(t);
+  const antes = doc(t);
+  t.begin();                   // pointerdown
+  a.move([10, 0, 0]);          // pointermove
+  t.begin();                   // algo de adentro que también agrupa
+  a.rotate(90, 'y');
+  t.commit();
+  a.move([10, 0, 0]);          // pointermove
+  t.commit();                  // pointerup
+  assert.notEqual(doc(t), antes);
+  t.undo();
+  assert.equal(doc(t), antes, 'todo el gesto es un solo paso');
+  assert.throws(() => t.commit(), /no hay una transacción abierta/);
+});
+
+test('rollback() cancela el gesto entero, y transaction(fn) vuelve atrás si fn tira', () => {
+  const t = createWorkshop();
+  const a = larguero(t);
+  const antes = doc(t);
+  const ev = [];
+  t.on((x) => ev.push(x));
+  t.begin();
+  a.move([10, 0, 0]);
+  larguero(t, [0, 0, 50]);
+  t.rollback();                // Esc durante el arrastre
+  assert.equal(doc(t), antes);
+  assert.equal(ev.at(-1).type, 'rollback');
+  assert.deepEqual(ev.at(-1).ids.sort(), ['P-1', 'P-2']);
+  assert.throws(() => t.transaction(() => { a.move([5, 0, 0]); throw new Error('algo falló'); }), /algo falló/);
+  assert.equal(doc(t), antes);
+  assert.equal(t.transaction(() => 42), 42, 'devuelve lo que devuelve fn');
+  t.undo();
+  assert.equal(doc(t), '{"version":3,"units":"cm","counters":{"piece":0,"assembly":0,"instance":0},"parts":[]}', 'ni el rollback ni la transacción vacía dejaron pasos');
+});
+
+test('una operación que falla a mitad de camino no deja nada hecho', () => {
+  const t = createWorkshop();
+  larguero(t);
+  const antes = doc(t);
+  // crea la pieza y recién después falla al meterla en un ensamble que no existe
+  assert.throws(() => t.model.addPiece({ size: [1, 1, 1], parent: 'E-9' }), /no existe la parte E-9/);
+  assert.equal(doc(t), antes, 'ni la pieza ni el contador de ids');
+  // dentro de una transacción, lo que falla vuelve atrás solo, y lo anterior queda
+  t.begin();
+  t.part('P-1').move([1, 0, 0]);
+  const movida = doc(t);
+  assert.throws(() => t.model.addPiece({ size: [1, 1, 1], parent: 'E-9' }));
+  assert.equal(doc(t), movida);
+  t.commit();
+  t.undo();
+  assert.equal(doc(t), antes);
+});
+
+test('deshacer avisa con los ids que cambiaron, y el visor se entera solo', () => {
+  const t = createWorkshop();
+  const a = larguero(t);
+  const b = larguero(t, [0, 0, 50]);
+  const e = t.assemble([a, b]);
+  const ev = [];
+  t.on((x) => ev.push(x));
+  e.rotate(90, 'y');
+  t.undo();
+  assert.equal(ev.at(-1).type, 'undo');
+  assert.deepEqual(ev.at(-1).ids, [e.id], 'girar un ensamble cambia un solo marco');
+  t.redo();
+  assert.equal(ev.at(-1).type, 'redo');
+  assert.deepEqual(ev.at(-1).ids, [e.id]);
+});
+
+test('una parte borrada y recuperada vuelve con el mismo id, y su handle viejo sirve', () => {
+  const t = createWorkshop();
+  const e = t.assemble([larguero(t), larguero(t, [0, 0, 50])]);
+  const hijo = e.children[0];
+  const antes = pts(e.vertices);
+  e.remove();
+  assert.throws(() => e.vertices, /no existe/);
+  t.undo();
+  assert.deepEqual(pts(e.vertices), antes, 'el mismo objeto vuelve a funcionar');
+  assert.equal(t.part(hijo.id).parent.id, e.id);
+  assert.equal(t.parts.length, 3);
+});
+
+test('deshacer un cambio en la fuente devuelve también a sus instancias', () => {
+  const t = createWorkshop();
+  const a = larguero(t);
+  const [i] = t.array(a, { type: 'linear', count: 2, direction: [0, 0, 1], distance: 50 });
+  a.resize([300, 4, 10]);
+  assert.equal(i.dims.length, 300);
+  t.undo();
+  assert.equal(i.dims.length, 200);
+  t.undo();                                   // la matriz
+  assert.throws(() => i.vertices, /no existe/);
+  assert.deepEqual(a.instances, []);
+});
+
+test('hacer algo nuevo después de deshacer descarta lo que se podía rehacer', () => {
+  const t = createWorkshop();
+  const a = larguero(t);
+  a.move([10, 0, 0]);
+  t.undo();
+  assert.equal(t.canRedo, true);
+  a.rotate(90, 'y');
+  assert.equal(t.canRedo, false);
+  assert.equal(t.redo(), false);
+});
+
+test('el historial tiene un límite, y cargar, vaciar u olvidar lo borra', () => {
+  const t = createWorkshop({ historyLimit: 3 });
+  const a = larguero(t);
+  for (let i = 0; i < 5; i++) a.move([1, 0, 0]);
+  let n = 0;
+  while (t.undo()) n++;
+  assert.equal(n, 3);
+  cerca([a.boundingBox.center.x], [2], 1e-9, 'solo se deshacen los últimos 3 pasos');
+
+  a.move([1, 0, 0]);
+  t.clearHistory();
+  assert.equal(t.canUndo, false);
+  a.move([1, 0, 0]);
+  t.load(t.toJSON());
+  assert.equal(t.canUndo, false, 'un documento cargado no tiene pasado');
+  a.move([1, 0, 0]);
+  t.clear();
+  assert.equal(t.canUndo, false);
+
+  const sin = createWorkshop({ historyLimit: 0 });
+  larguero(sin);
+  assert.equal(sin.canUndo, false);
+  assert.throws(() => createWorkshop({ historyLimit: -1 }), /historyLimit inválido/);
+});
+
+test('no se deshace, ni se carga, con una transacción abierta', () => {
+  const t = createWorkshop();
+  larguero(t);
+  t.begin();
+  assert.throws(() => t.undo(), /transacción abierta/);
+  assert.throws(() => t.redo(), /transacción abierta/);
+  assert.throws(() => t.load({ counters: {}, parts: [] }), /transacción abierta/);
+  t.commit();
+  assert.equal(t.undo(), true);
+});
+
+test('lo guardado es inmutable: nadie lo cambia por la espalda', () => {
+  const t = createWorkshop();
+  const a = larguero(t);
+  const rec = t.model.get(a.id);
+  assert.ok(Object.isFrozen(rec) && Object.isFrozen(rec.frame) && Object.isFrozen(rec.size));
+  assert.throws(() => { rec.size[0] = 1; }, TypeError);
+  assert.equal(a.dims.length, 200);
+});
+
 // ---------- que el SDK siga siendo puro ----------
 
 test('el SDK no depende de ningún paquete externo ni del navegador (lo puede usar el servidor)', async () => {

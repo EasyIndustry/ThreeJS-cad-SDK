@@ -279,6 +279,40 @@ cuenta a la original: con `count: 4` se crean tres instancias.
 - Las matrices **crean** instancias y listo: no queda un objeto "matriz" que se re-evalúe. Si la
   cantidad depende de otra cosa (un volumen que se estira), quien llama vuelve a calcularla.
 
+## Deshacer y rehacer
+
+El historial vive en el documento, porque es el documento el que sabe qué cambió.
+
+```js
+taller.undo();  taller.redo();          // false si no había nada
+taller.canUndo; taller.canRedo;         // para habilitar botones
+
+// un gesto son muchos cambios: que valgan un solo paso
+taller.begin();                         // pointerdown
+pieza.move(delta);                      // pointermove, cien veces
+taller.commit();                        // pointerup   (o taller.rollback() con Esc)
+
+taller.transaction(() => { a.move(v); b.rotate(90, 'y'); });   // lo mismo, en una función
+```
+
+- **Cada operación es un paso**, y `begin()`/`commit()` (o `transaction(fn)`) agrupan varias en
+  uno. Se anidan: vale la de afuera. `begin`/`commit` existen porque un arrastre cruza varios
+  eventos y no entra en una función.
+- **Nada queda a medias.** Una operación que falla deja el documento como estaba antes de ella;
+  `transaction(fn)` vuelve atrás entera si `fn` tira, y `rollback()` cancela la transacción
+  abierta.
+- **Deshacer avisa como cualquier otro cambio** (`on`: `'undo'`, `'redo'`, `'rollback'`, con los ids
+  que cambiaron), así el adaptador de three se entera solo.
+- **Una parte borrada y recuperada vuelve con el mismo id**, y el handle que se tenía de ella
+  vuelve a servir.
+- `taller.array(...)` es un solo paso. `Transform.apply(t, [a, b, c])` mueve cada parte por
+  separado: para que una selección sea un solo paso, va adentro de `taller.transaction`.
+- El historial guarda hasta `historyLimit` pasos (100; `createWorkshop({ historyLimit })`, 0 para
+  no guardar nada). `load()`, `clear()` y `clearHistory()` lo borran: un documento cargado no
+  tiene pasado.
+- Lo guardado es inmutable (cada cambio reemplaza el registro), así que un paso no copia el
+  documento: comparte todo lo que no cambió.
+
 ## La API
 
 ```js
@@ -354,7 +388,6 @@ Dicho para que nadie lo dé por hecho:
   el contacto la va a usar.
 - **No hay fijaciones, juntas de movimiento, vínculos ni recortes.** Son relaciones
   entre partes, y cada una va a entrar siguiendo la regla de arriba.
-- **No hay deshacer.**
 
 ## Licencia
 

@@ -4,6 +4,32 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 según [SemVer](https://semver.org): mientras sea `0.x`, una versión menor puede romper algo,
 y si rompe queda dicho arriba de todo en esa entrada (ver `CONTRIBUTING.md`).
 
+## [0.6.0] - 2026-10-06
+
+Responde a [#4](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/4): deshacer y rehacer.
+
+### Added
+
+- `taller.undo()`, `taller.redo()`, `taller.canUndo`, `taller.canRedo` y `taller.clearHistory()`.
+  Deshacer vuelve exactamente al documento anterior (marcos, definiciones, ensambles,
+  instancias y contadores de ids): hacer N cosas y deshacer N veces deja `toJSON()` igual.
+- `taller.begin()` / `commit()` / `rollback()` y `taller.transaction(fn)`: varios cambios
+  valen un solo paso. Se anidan.
+- `createWorkshop({ historyLimit })`: cuántos pasos se guardan (100 por defecto; 0: ninguno).
+- Avisos `'undo'`, `'redo'` y `'rollback'` en `on()`, con los ids que cambiaron.
+
+### Changed
+
+- Toda operación es atómica: si falla a mitad de camino, el documento queda como estaba
+  antes de ella (antes podía quedar, por ejemplo, una pieza creada sin su ensamble).
+- `taller.array(...)` es un solo paso de deshacer.
+- Los registros guardados en el modelo son inmutables (están congelados); cada cambio los
+  reemplaza. Quien leía `model.parts` puede seguir leyéndolo, pero ya no puede escribirle
+  encima (nunca fue API; ahora falla).
+- `load()` y `clear()` borran el historial, y no se puede cargar con una transacción abierta.
+
+Nada rompe una llamada existente de la API pública.
+
 ## [0.5.0] - 2026-10-06
 
 Unidades y tolerancias: nada del SDK asume centímetros, y las tolerancias salen de un archivo
@@ -119,6 +145,7 @@ Primera versión. El núcleo puro (documento, partes, marcos, geometría, contac
 intersección, con `help()` verificado por test) y el adaptador de three que espeja el
 modelo en una escena.
 
+[0.6.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.2.0...v0.3.0

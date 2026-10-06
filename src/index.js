@@ -329,11 +329,12 @@ export class Assembly extends Part {
  * `units`: la unidad de todas las medidas (mm, cm, m, in o ft; cm si no se dice). Es un dato
  * del documento: se guarda con él, y un documento cargado trae la suya.
  * `tolerances`: pisa las tolerancias que sugiere config.js para esa unidad, en esa unidad.
+ * `historyLimit`: cuántos pasos se pueden deshacer (100 si no se dice; 0: sin historial).
  * También se puede pasar un `Model` ya armado en lugar de las opciones.
- * @param {Model | { units?: Unit, tolerances?: Partial<Tolerances> }} [init]
+ * @param {Model | { units?: Unit, tolerances?: Partial<Tolerances>, historyLimit?: number }} [init]
  */
 export function createWorkshop(init = {}) {
-  const model = init instanceof Model ? init : new Model({ units: init.units });
+  const model = init instanceof Model ? init : new Model({ units: init.units, historyLimit: init.historyLimit });
   const override = init instanceof Model ? {} : init.tolerances ?? {};
   tolerancesFor(model.units, override); // que un valor inválido falle al crear, no en la primera pregunta
   /** @type {Map<string, Part>} */
@@ -404,13 +405,14 @@ export function createWorkshop(init = {}) {
     /**
      * Repite una parte en línea, en área o alrededor de un eje (ver `arrayTransforms`).
      * `count` cuenta a la original: con 4 se crean 3 instancias, que siguen a la fuente.
+     * Es un solo paso de deshacer.
      * @param {Part | string} part @param {ArraySpec} spec
      * @returns {readonly Part[]} las instancias nuevas
      */
     array(part, spec) {
       const p = c.part(idDe(part));
       const ts = arrayTransforms(spec, { origin: p.boundingBox.center });
-      return Object.freeze(ts.slice(1).map((t) => instantiate(p, { placement: t })));
+      return model.transaction(() => Object.freeze(ts.slice(1).map((t) => instantiate(p, { placement: t }))));
     },
     /** @param {string} id */
     part(id) { return c.part(id); },
@@ -434,6 +436,25 @@ export function createWorkshop(init = {}) {
     tree() { return model.tree(); },
     /** @param {(ev: { type: string, ids: string[] }) => void} fn */
     on(fn) { return model.on(fn); },
+    /** Vuelve al documento de antes del último paso (marcos, definiciones, ensambles, instancias). false si no había nada. */
+    undo() { return model.undo(); },
+    /** Vuelve a hacer lo último que se deshizo. false si no había nada. */
+    redo() { return model.redo(); },
+    get canUndo() { return model.canUndo; },
+    get canRedo() { return model.canRedo; },
+    /** Abre una transacción: lo que se haga hasta `commit()` es un solo paso de deshacer. Se anidan. */
+    begin() { model.begin(); },
+    /** Cierra la transacción abierta. */
+    commit() { model.commit(); },
+    /** Cancela la transacción abierta: el documento vuelve a como estaba en `begin()`. */
+    rollback() { model.rollback(); },
+    /**
+     * Hace `fn` como un solo paso de deshacer. Si tira, el documento vuelve a como estaba.
+     * @template T @param {() => T} fn @returns {T}
+     */
+    transaction(fn) { return model.transaction(fn); },
+    /** Olvida lo que se puede deshacer y rehacer; el documento queda como está. */
+    clearHistory() { model.clearHistory(); },
     toJSON() { return model.toJSON(); },
     /** @param {any} data */
     load(data) { cache.clear(); model.load(data); },
@@ -458,10 +479,19 @@ export const WORKSHOP_MEMBERS = [
   ['contacts({ tolerance? })', 'todos los contactos entre piezas (Contact)'],
   ['collisions({ tolerance? })', 'todas las piezas que se meten unas en otras (Intersection)'],
   ['tree()', 'el árbol de partes, como texto'],
-  ['on(fn)', 'enterarse de cada cambio; devuelve cómo desuscribirse'],
+  ['on(fn)', "enterarse de cada cambio ({ type, ids }); deshacer avisa con 'undo' y 'redo', y cancelar con 'rollback'; devuelve cómo desuscribirse"],
+  ['undo()', 'volver al documento de antes del último paso; false si no había nada'],
+  ['redo()', 'volver a hacer lo último que se deshizo; false si no había nada'],
+  ['canUndo', '¿hay algo para deshacer?'],
+  ['canRedo', '¿hay algo para rehacer?'],
+  ['begin()', 'abrir una transacción: lo que se haga hasta commit() es un solo paso de deshacer (se anidan)'],
+  ['commit()', 'cerrar la transacción abierta'],
+  ['rollback()', 'cancelar la transacción abierta: el documento vuelve a como estaba en begin()'],
+  ['transaction(fn)', 'hacer fn como un solo paso de deshacer; si tira, todo vuelve a como estaba'],
+  ['clearHistory()', 'olvidar lo que se puede deshacer y rehacer'],
   ['toJSON()', 'todo el documento, para guardar'],
-  ['load(data)', 'cargar un documento guardado'],
-  ['clear()', 'vaciar el documento'],
+  ['load(data)', 'cargar un documento guardado (borra el historial)'],
+  ['clear()', 'vaciar el documento (borra el historial; conserva la unidad)'],
   ['model', 'el modelo por dentro (para el visor y las pruebas)'],
   ['Point3d  Vector3d  Line  BoundingBox  Face  Transform  Contact  Intersection', 'las clases de valores, a mano'],
   ['help()', 'esta tabla'],
