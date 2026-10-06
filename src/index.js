@@ -72,6 +72,14 @@ const piezasDe = (m, id) => m.piecesOf(id).map((p) => p.id);
 
 /** Una pieza que es una caja lisa: sin forma de bruto y sin operaciones. @param {{ shape?: unknown, operations?: readonly unknown[] }} p */
 const esCaja = (p) => !p.shape && !p.operations?.length;
+/** ¿Tiene recortes? Entonces su contacto se mira con su forma real: el recorte existe para sacar el choque. @param {{ operations?: readonly { kind: string }[] }} p */
+const recortada = (p) => !!p.operations?.some((o) => o.kind === 'trim');
+/** ¿Exacto para este par? Lo pedido, o, si no se dijo, cuando alguna tiene recortes. @param {Model} m @param {string} x @param {string} y @param {boolean | undefined} exact */
+const exactoPara = (m, x, y, exact) => {
+  const [px, py] = [m.piece(x), m.piece(y)];
+  if (esCaja(px) && esCaja(py)) return false;
+  return exact ?? (recortada(px) || recortada(py));
+};
 
 /** Los pedazos convexos de una pieza, en el mundo. @param {Ctx} c @param {string} id */
 const convexosEnElMundo = (c, id) => c.convex(id).map((k) => transformConvex(k, c.model.worldFrame(id)));
@@ -102,15 +110,16 @@ function caraDePlano(m, id, pl) {
 /**
  * Los contactos entre las piezas de dos grupos (cada par una vez). Un par que se mete uno
  * en otro (más de `pen`) no cuenta como contacto: eso es una intersección. Con `exact`, cada
- * pieza que no es una caja lisa se toma con su forma real (sus convexos).
+ * pieza que no es una caja lisa se toma con su forma real (sus convexos); si no se dice, se hace
+ * para los pares donde alguna tiene recortes.
  * @param {Ctx} c @param {string[]} as @param {string[]} bs @param {number} tol @param {number} pen @param {boolean} [exact]
  */
-function contactos(c, as, bs, tol, pen, exact = false) {
+function contactos(c, as, bs, tol, pen, exact) {
   const m = c.model;
   /** @type {Contact[]} */
   const out = [];
   for (const [x, y] of candidatePairs(m, as, bs, tol)) {
-    if (exact && !(esCaja(m.piece(x)) && esCaja(m.piece(y)))) {
+    if (exactoPara(m, x, y, exact)) {
       out.push(...contactosExactos(c, x, y, tol, pen));
       continue;
     }
@@ -169,12 +178,12 @@ function dentroDeCara(p, poly, n, tol) {
  * Las intersecciones entre las piezas de dos grupos. Con `exact`, con la forma real.
  * @param {Ctx} c @param {string[]} as @param {string[]} bs @param {number} tol @param {boolean} [exact]
  */
-function intersecciones(c, as, bs, tol, exact = false) {
+function intersecciones(c, as, bs, tol, exact) {
   const m = c.model;
   /** @type {Intersection[]} */
   const out = [];
   for (const [x, y] of candidatePairs(m, as, bs, 0)) {
-    if (exact && !(esCaja(m.piece(x)) && esCaja(m.piece(y)))) {
+    if (exactoPara(m, x, y, exact)) {
       const A = convexosEnElMundo(c, x), B = convexosEnElMundo(c, y);
       let depth = -Infinity, volume = 0;
       /** @type {number[][]} */ const vertices = [];
@@ -377,19 +386,21 @@ export class Part {
   // `tolerance`, si se pasa, va en la unidad del documento; si no, la del taller (`taller.tolerances`).
 
   // `exact: true`: con la forma real de cada pieza (perfil, torneado, operaciones), no con su caja.
+  // Si no se dice, es exacto para los pares donde alguna pieza tiene recortes; `exact: false`
+  // fuerza las cajas.
 
   /** ¿Se toca con la otra (a `tolerance` o menos), sin meterse? @param {Part | string} other @param {{ tolerance?: number, exact?: boolean }} [opts] */
   touches(other, { tolerance, exact } = {}) { return this.contactsWith(other, { tolerance, exact }).length > 0; }
   /** ¿Se mete en la otra más de `tolerance`? @param {Part | string} other @param {{ tolerance?: number, exact?: boolean }} [opts] */
   intersects(other, { tolerance, exact } = {}) { return this.intersectionsWith(other, { tolerance, exact }).length > 0; }
   /** Dónde se toca con la otra. @param {Part | string} other @param {{ tolerance?: number, exact?: boolean }} [opts] */
-  contactsWith(other, { tolerance, exact = false } = {}) {
+  contactsWith(other, { tolerance, exact } = {}) {
     const c = ctx(this), m = c.model;
     const t = c.tolerances();
     return contactos(c, piezasDe(m, this.id), piezasDe(m, idDe(other)), tolerance ?? t.touch, t.penetration, exact);
   }
   /** Lo que comparte de volumen con la otra. @param {Part | string} other @param {{ tolerance?: number, exact?: boolean }} [opts] */
-  intersectionsWith(other, { tolerance, exact = false } = {}) {
+  intersectionsWith(other, { tolerance, exact } = {}) {
     const c = ctx(this), m = c.model;
     return intersecciones(c, piezasDe(m, this.id), piezasDe(m, idDe(other)), tolerance ?? c.tolerances().penetration, exact);
   }
@@ -629,9 +640,12 @@ export function createWorkshop(init = {}) {
    */
   const formas = { solid: new WeakMap(), features: new WeakMap(), convex: new WeakMap() };
   /**
-   * @template T @param {keyof typeof formas} que @param {Definition} def @param {() => T} calcular @returns {T}
+   * `firma`: lo que, además de la definición, cambia el resultado (los recortes: dónde está la
+   * otra pieza respecto de esta, y su forma). Se guardan las últimas firmas de cada definición.
+   * @template T @param {keyof typeof formas} que @param {Definition} def @param {() => T} calcular @param {string} [firma]
+   * @returns {T}
    */
-  const porDefinicion = (que, def, calcular) => {
+  const porDefinicion = (que, def, calcular, firma = '') => {
     const claves = [def.size, def.shape ?? SIN_FORMA, def.operations ?? SIN_OPERACIONES];
     /** @type {WeakMap<object, any>} */
     let nivel = formas[que];
@@ -640,8 +654,54 @@ export function createWorkshop(init = {}) {
       nivel = nivel.get(k);
     }
     const ultima = claves[claves.length - 1];
-    if (!nivel.has(ultima)) nivel.set(ultima, calcular());
-    return nivel.get(ultima);
+    if (!nivel.has(ultima)) nivel.set(ultima, new Map());
+    /** @type {Map<string, T>} */
+    const porFirma = nivel.get(ultima);
+    if (porFirma.has(firma)) return /** @type {T} */ (porFirma.get(firma));
+    const v = calcular();
+    porFirma.set(firma, v);
+    if (porFirma.size > 32) porFirma.delete(/** @type {string} */ (porFirma.keys().next().value));
+    return v;
+  };
+  /** Un número por objeto, para meter su identidad en una firma. @type {WeakMap<object, number>} */
+  const numeros = new WeakMap();
+  let siguiente = 0;
+  const numero = (/** @type {object} */ o) => {
+    let n = numeros.get(o);
+    if (n === undefined) { n = ++siguiente; numeros.set(o, n); }
+    return n;
+  };
+  /**
+   * La pieza contra la que recorta un recorte, vista desde `id`: si `id` es de adentro de una
+   * instancia, la de la misma instancia (`I-1/P-2` para el `P-2` de la fuente).
+   * @param {string} id @param {string} contra @returns {string | null}
+   */
+  const resolverContra = (id, contra) => {
+    const segs = id.split('/');
+    for (let k = segs.length - 1; k >= 0; k--) {
+      const cand = [...segs.slice(0, k), contra].join('/');
+      try { model.piece(cand); return cand; } catch { /* sigue con un prefijo más corto */ }
+    }
+    return null;
+  };
+  /** @param {string} id @returns {import('./solid.js').Recortes} */
+  const recortesDe = (id) => (op) => {
+    const otra = resolverContra(id, op.against);
+    if (!otra) return null;
+    return { def: model.definition(otra), rel: compose(invert(model.worldFrame(id)), model.worldFrame(otra)) };
+  };
+  /** Lo que, aparte de su definición, cambia la forma de una pieza con recortes. @param {string} id @param {Definition} def */
+  const firmaDe = (id, def) => {
+    const trims = (def.operations ?? []).filter((o) => o.kind === 'trim');
+    if (!trims.length) return '';
+    const r = recortesDe(id);
+    return trims.map((op) => {
+      const o = r(/** @type {import('./solid.js').TrimOperation} */ (op));
+      if (!o) return 'x';
+      const marco = [...o.rel.r, ...o.rel.t].map((v) => Math.round(v * 1e9)).join(',');
+      const forma = op.mode === 'shape' ? `${numero(o.def.shape ?? SIN_FORMA)},${numero(o.def.operations ?? SIN_OPERACIONES)}` : '';
+      return `${numero(o.def.size)}:${forma}:${marco}`;
+    }).join('|');
   };
   /**
    * Revisa la forma de un bruto y, si es un perfil, que su sección exista y se pueda armar con
@@ -664,15 +724,15 @@ export function createWorkshop(init = {}) {
     checkSection,
     solid(id) {
       const def = model.definition(id);
-      return porDefinicion('solid', def, () => solidOf(def, { kernel, sections }));
+      return porDefinicion('solid', def, () => solidOf(def, { kernel, sections, recortes: recortesDe(id) }), firmaDe(id, def));
     },
     features(id) {
       const def = model.definition(id);
-      return porDefinicion('features', def, () => featuresOf(c.solid(id)));
+      return porDefinicion('features', def, () => featuresOf(c.solid(id)), firmaDe(id, def));
     },
     convex(id) {
       const def = model.definition(id);
-      return porDefinicion('convex', def, () => convexPartsOf(def, sections));
+      return porDefinicion('convex', def, () => convexPartsOf(def, sections, recortesDe(id)), firmaDe(id, def));
     },
     part(id) {
       const kind = model.get(id).kind; // que falle acá, con un mensaje claro, si no existe
@@ -853,13 +913,13 @@ export function createWorkshop(init = {}) {
     /** Las tolerancias en uso, en la unidad del documento: las sugeridas para ella (config.js) y lo que se haya pisado. */
     get tolerances() { return c.tolerances(); },
     /** Todos los contactos entre piezas del documento. @param {{ tolerance?: number, exact?: boolean }} [opts] */
-    contacts({ tolerance, exact = false } = {}) {
+    contacts({ tolerance, exact } = {}) {
       const ps = model.allPieces().map((p) => p.id);
       const t = c.tolerances();
       return contactos(c, ps, ps, tolerance ?? t.touch, t.penetration, exact);
     },
     /** Todas las piezas que se meten unas en otras. @param {{ tolerance?: number, exact?: boolean }} [opts] */
-    collisions({ tolerance, exact = false } = {}) {
+    collisions({ tolerance, exact } = {}) {
       const ps = model.allPieces().map((p) => p.id);
       return intersecciones(c, ps, ps, tolerance ?? c.tolerances().penetration, exact);
     },

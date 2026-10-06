@@ -17,6 +17,12 @@
 //   { kind: 'hole', axis, side, at, diameter, depth? }
 //                                    un agujero que entra por la cara `side` (1 o -1) de `axis`,
 //                                    en `at` = [u, v] de 0 a 1 sobre esa cara; sin `depth`, pasante.
+//   { kind: 'trim', against, mode? } la pieza pierde el volumen de la pieza `against` donde se
+//                                    cruzan: el de su caja (mode 'box', por defecto) o el de su
+//                                    forma (mode 'shape', sin sus propios recortes, para que dos
+//                                    piezas que se recortan una a otra no den vueltas). Depende de
+//                                    dónde está la otra RESPECTO de esta: mover el ensamble que
+//                                    contiene a las dos no lo cambia.
 //
 // Dos maneras de calcular:
 //   - la MALLA (lo que se dibuja): sin operaciones, la del bruto; con un solo corte en una caja,
@@ -27,9 +33,9 @@
 //     solapan. Es exacta para cualquier combinación de operaciones y no necesita kernel.
 //
 // Puro: no importa three ni DOM.
-import { Mesh } from './geometry.js';
+import { Mesh, Transform } from './geometry.js';
 import { triangulate, convexPartition, signedArea } from './polygon.js';
-import { prismConvex, frustumConvex, intersect, subtract, boundaryFaces } from './convex.js';
+import { prismConvex, frustumConvex, intersect, subtract, boundaryFaces, transformConvex } from './convex.js';
 import { resolveSection, cerrarTorneado, ellipse, CIRCLE_SIDES } from './sections.js';
 
 /** @typedef {import('./frame.js').Vec3} Vec3 */
@@ -41,7 +47,13 @@ import { resolveSection, cerrarTorneado, ellipse, CIRCLE_SIDES } from './section
 /** @typedef {import('./sections.js').LatheShape} LatheShape */
 /** @typedef {{ kind: 'cut', axis: 0 | 1 | 2, outline: Vec2[] }} CutOperation */
 /** @typedef {{ kind: 'hole', axis: 0 | 1 | 2, side: 1 | -1, at: Vec2, diameter: number, depth?: number }} HoleOperation */
-/** @typedef {CutOperation | HoleOperation} OperationSpec */
+/** @typedef {{ kind: 'trim', against: string, mode: 'box' | 'shape' }} TrimOperation */
+/** @typedef {CutOperation | HoleOperation | TrimOperation} OperationSpec */
+/**
+ * Para un recorte: la definición de la otra pieza y el marco que lleva de su espacio al de esta
+ * (o null si la otra ya no existe).
+ * @typedef {(op: TrimOperation) => { def: Definition, rel: import('./frame.js').Frame } | null} Recortes
+ */
 /** Una operación guardada: la de arriba, con su id dentro de la pieza. @typedef {OperationSpec & { id: string }} Operation */
 /**
  * Lo que combina sólidos en 3D. Recibe y devuelve mallas en el marco local de la pieza; puede
@@ -53,7 +65,7 @@ import { resolveSection, cerrarTorneado, ellipse, CIRCLE_SIDES } from './section
 /** @typedef {{ outer: Vec3[], holes: Vec3[][], surface: string, smooth: boolean }} CaraPlana */
 
 /** Las operaciones que el SDK sabe hacer. */
-export const OPERATION_KINDS = Object.freeze(['cut', 'hole']);
+export const OPERATION_KINDS = Object.freeze(['cut', 'hole', 'trim']);
 
 /** Cuánto (en proporción del largo de la pieza) sobresale una herramienta, para que no haya caras coplanares. */
 const SOBRANTE = 0.01;
@@ -121,6 +133,12 @@ export function checkOperation(op) {
       out.depth = depth;
     }
     return out;
+  }
+  if (o.kind === 'trim') {
+    if (typeof o.against !== 'string' || !o.against) throw new TypeError('recorte inválido: va against, el id de la otra pieza');
+    const mode = o.mode ?? 'box';
+    if (mode !== 'box' && mode !== 'shape') throw new TypeError(`recorte inválido: mode ${String(mode)} (va 'box' o 'shape')`);
+    return { kind: 'trim', against: o.against, mode };
   }
   throw new TypeError(`operación desconocida: ${String(o.kind)} (van ${OPERATION_KINDS.join(', ')})`);
 }
@@ -386,9 +404,10 @@ function prismasConvexos(seccion, axis, desde, hasta, S, nombre) {
 /**
  * La forma de una pieza (en su marco local) como unión de convexos que no se solapan: exacta
  * para cualquier combinación de operaciones, sin kernel.
- * @param {Definition} def @param {Readonly<Record<string, SectionFn>>} sections @returns {Convex[]}
+ * @param {Definition} def @param {Readonly<Record<string, SectionFn>>} sections @param {Recortes} [recortes]
+ * @returns {Convex[]}
  */
-export function convexPartsOf(def, sections) {
+export function convexPartsOf(def, sections, recortes = () => null) {
   const S = escalaDe(def.size);
   /** @type {Convex[]} */
   let partes;
@@ -416,15 +435,24 @@ export function convexPartsOf(def, sections) {
       const nuevas = [];
       for (const p of partes) for (const t of herramientas) { const c = intersect(p, t); if (c) nuevas.push(c); }
       partes = nuevas;
-    } else {
+    } else if (op.kind === 'hole') {
       const [a, b] = tramoAgujero(def.size, op);
       const circulo = circuloAgujero(def.size, op);
       const cil = prismConvex(circulo, op.axis, a, b, circulo.map(() => `agujero:${op.id}`), S);
       if (cil) partes = partes.flatMap((p) => subtract(p, cil));
+    } else {
+      const otra = recortes(op);
+      if (!otra) continue;
+      const cortadores = (op.mode === 'shape' ? convexPartsOf(sinRecortes(otra.def), sections) : convexPartsOf({ ...otra.def, shape: null, operations: [] }, sections))
+        .map((k) => transformConvex(k, otra.rel));
+      for (const k of cortadores) partes = partes.flatMap((p) => subtract(p, k));
     }
   }
   return partes;
 }
+
+/** La misma definición, sin sus recortes. @param {Definition} def @returns {Definition} */
+const sinRecortes = (def) => ({ ...def, operations: (def.operations ?? []).filter((o) => o.kind !== 'trim') });
 
 /**
  * La malla de una unión de convexos: sus caras de afuera, con sus superficies (las caras de un
@@ -442,17 +470,26 @@ export function meshOfConvexParts(partes) {
 /**
  * La forma de una pieza, en su marco local: el bruto con sus operaciones.
  * @param {Definition} def
- * @param {{ kernel?: Kernel | null, sections: Readonly<Record<string, SectionFn>> }} opts
+ * @param {{ kernel?: Kernel | null, sections: Readonly<Record<string, SectionFn>>, recortes?: Recortes }} opts
  * @returns {Mesh}
  */
-export function solidOf(def, { kernel = null, sections }) {
+export function solidOf(def, { kernel = null, sections, recortes = () => null }) {
   const ops = def.operations ?? [];
   if (!ops.length) return stockMesh(def, sections);
   if (!def.shape && ops.length === 1 && ops[0].kind === 'cut') return cutTool(def.size, ops[0], 0); // una caja con un solo corte: la extrusión del contorno
   if (kernel) {
     let s = stockMesh(def, sections);
-    for (const op of ops) s = Mesh.from(op.kind === 'cut' ? kernel.intersect(s, cutTool(def.size, op)) : kernel.subtract(s, holeTool(def.size, op)));
+    for (const op of ops) {
+      if (op.kind === 'cut') s = Mesh.from(kernel.intersect(s, cutTool(def.size, op)));
+      else if (op.kind === 'hole') s = Mesh.from(kernel.subtract(s, holeTool(def.size, op)));
+      else {
+        const otra = recortes(op);
+        if (!otra) continue;
+        const cortador = op.mode === 'shape' ? solidOf(sinRecortes(otra.def), { kernel, sections }) : boxMesh(otra.def.size);
+        s = Mesh.from(kernel.subtract(s, cortador.transform(new Transform(otra.rel))));
+      }
+    }
     return s;
   }
-  return meshOfConvexParts(convexPartsOf(def, sections));
+  return meshOfConvexParts(convexPartsOf(def, sections, recortes));
 }

@@ -73,7 +73,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
   root.add(piezas, capas);
   scene.add(root);
 
-  /** @type {Map<string, { mesh: THREE.Mesh, edges: THREE.LineSegments, key: string }>} */
+  /** @type {Map<string, { mesh: THREE.Mesh, edges: THREE.LineSegments, key: string, forma: unknown }>} */
   const mallas = new Map();
   const ver = { axes: false, boxes: false, labels: false, contacts: false };
   /** @type {Set<string>} */
@@ -94,8 +94,11 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
     for (const p of model.allPieces()) {
       vivas.add(p.id);
       const key = JSON.stringify([p.size, p.shape, p.material, p.operations]);
+      // la forma que resulta puede cambiar sin que cambie la definición (un recorte, si se mueve la otra pieza)
+      let forma = null;
+      if (!geometryFor && (p.shape || p.operations?.length)) { try { forma = workshop.part(p.id).local.solid; } catch { forma = null; } }
       let e = mallas.get(p.id);
-      if (!e || e.key !== key) {
+      if (!e || e.key !== key || e.forma !== forma) {
         if (e) tirar(e);
         const mesh = new THREE.Mesh(geo(p), mat(p));
         mesh.matrixAutoUpdate = false;
@@ -104,7 +107,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
         const edges = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, 25), new THREE.LineBasicMaterial({ transparent: true, opacity: 0.6 }));
         mesh.add(edges);
         piezas.add(mesh);
-        e = { mesh, edges, key };
+        e = { mesh, edges, key, forma };
         mallas.set(p.id, e);
       }
       e.mesh.matrix.fromArray(toColumns4(model.worldFrame(p.id)));

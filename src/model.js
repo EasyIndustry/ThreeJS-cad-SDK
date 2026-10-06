@@ -201,10 +201,14 @@ export class Model {
 
   /** @param {string[]} ids @returns {string[]} */
   #conInstancias(ids) {
-    const insts = [...this.parts.values()].filter((p) => p.kind === 'instance');
-    if (!insts.length) return ids;
     const out = new Set(ids);
-    const tocadas = new Set(ids.filter((id) => this.parts.has(id)));
+    // las piezas que se recortan contra algo que cambió también cambian
+    for (const p of this.parts.values()) {
+      if (p.kind === 'piece' && p.operations?.some((o) => o.kind === 'trim' && out.has(o.against))) out.add(p.id);
+    }
+    const insts = [...this.parts.values()].filter((p) => p.kind === 'instance');
+    if (!insts.length) return [...out];
+    const tocadas = new Set([...out].filter((id) => this.parts.has(id)));
     /** @type {Set<string>} */
     const alcanzadas = new Set();
     for (let creció = true; creció;) {
@@ -804,6 +808,7 @@ export class Model {
       }
       for (const k of guardadas) this.parts.delete(k);
       this.emit('remove', ids);
+      this.#limpiarRecortes();
     });
   }
 
@@ -875,6 +880,7 @@ export class Model {
         this.#remapear(copias);
       }
       this.emit('detach', [...new Set([...antes, ...this.subtree(id)])]);
+      this.#limpiarRecortes();
     });
   }
 
@@ -984,6 +990,39 @@ export class Model {
 
   // ---------- operaciones: lo que se le hace al bruto ----------
 
+  /** Revisa una operación; un recorte, además, contra una pieza que exista y no sea ella misma. @param {string} pieceId @param {unknown} op */
+  #checkOp(pieceId, op) {
+    const o = checkOperation(op);
+    if (o.kind === 'trim') {
+      if (o.against === pieceId) throw new Error(`${pieceId} no se puede recortar contra sí misma`);
+      this.piece(o.against);
+    }
+    return o;
+  }
+
+  /** ¿Existe esa pieza (también una de adentro de una instancia)? @param {string} id */
+  #existe(id) {
+    try { this.piece(id); return true; } catch { return false; }
+  }
+
+  /**
+   * Saca los recortes que apuntan a una pieza que ya no está (se borró, o era de adentro de una
+   * instancia que se soltó). Va en el mismo paso: deshacer devuelve la pieza y el recorte.
+   */
+  #limpiarRecortes() {
+    /** @type {string[]} */
+    const cambiadas = [];
+    for (const p of [...this.parts.values()]) {
+      if (p.kind !== 'piece' || !p.operations?.some((o) => o.kind === 'trim')) continue;
+      const quedan = p.operations.filter((o) => o.kind !== 'trim' || this.#existe(o.against));
+      if (quedan.length !== p.operations.length) {
+        this.#patch(p.id, { operations: quedan });
+        cambiadas.push(p.id);
+      }
+    }
+    if (cambiadas.length) this.emit('operation', cambiadas);
+  }
+
   /** @param {Operation[]} ops */
   #siguienteOp(ops) {
     return `O-${Math.max(0, ...ops.map((o) => Number(o.id.slice(2)) || 0)) + 1}`;
@@ -1005,7 +1044,7 @@ export class Model {
   addOperation(pieceId, op) {
     return this.#paso(() => {
       const ops = this.ownPiece(pieceId).operations ?? [];
-      const nueva = /** @type {Operation} */ ({ id: this.#siguienteOp(ops), ...checkOperation(op) });
+      const nueva = /** @type {Operation} */ ({ id: this.#siguienteOp(ops), ...this.#checkOp(pieceId, op) });
       this.#patch(pieceId, { operations: [...ops, nueva] });
       this.emit('operation', [pieceId]);
       return nueva.id;
@@ -1016,7 +1055,7 @@ export class Model {
   updateOperation(pieceId, opId, op) {
     this.#paso(() => {
       const { ops, i } = this.#indiceOp(pieceId, opId);
-      const nueva = /** @type {Operation} */ ({ id: opId, ...checkOperation(op) });
+      const nueva = /** @type {Operation} */ ({ id: opId, ...this.#checkOp(pieceId, op) });
       this.#patch(pieceId, { operations: ops.map((o, k) => (k === i ? nueva : o)) });
       this.emit('operation', [pieceId]);
     });

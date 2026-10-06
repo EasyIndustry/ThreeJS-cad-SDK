@@ -11,7 +11,8 @@ Responde a [#6](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/6) (la pi
 bruto más una lista de operaciones, y la forma que resulta es un cálculo) y
 [#7](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/7) (formas reales: perfiles,
 torneados y su geometría), [#8](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/8)
-(agarre) y [#9](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/9) (colocación).
+(agarre), [#9](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/9) (colocación) y
+[#10](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/10) (recortes entre piezas).
 
 ### Breaking
 
@@ -52,6 +53,11 @@ torneados y su geometría), [#8](https://github.com/EasyIndustry/ThreeJS-cad-SDK
 - Agarre: `parte.closest(punto, { tolerance?, space? })` (vértice, arista o cara más cercana,
   con franja por eje), `taller.pick(rayo, { exclude? })` (la primera pieza que corta, contra su
   forma real) y `sameFeature(a, b)`.
+- Recortes: la operación `{ kind: 'trim', against, mode: 'box' | 'shape' }`. Depende del marco
+  relativo entre las dos piezas (mover el ensamble que las contiene no la recalcula); borrar la
+  otra quita el recorte en el mismo paso; mover la otra avisa por la recortada.
+- El contacto y el choque son exactos, sin pedirlo, en los pares donde alguna pieza tiene
+  recortes (`exact: false` fuerza las cajas).
 - Colocación, funciones que proponen y no aplican: `taller.snap(partes, { distance?, grid? })`,
   `taller.pushOut(partes, { floor?, up? })`, `taller.drop(partes, { floor?, up? })`,
   `taller.alignmentGuides(partes)` y `Transform.orient(caraA, caraB, { faceToward?, flip? })`.

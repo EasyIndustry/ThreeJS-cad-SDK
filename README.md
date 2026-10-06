@@ -333,6 +333,7 @@ p.removeOperation('O-2');   // vuelve exactamente a la forma de antes
 |---|---|
 | `{ kind: 'cut', axis, outline }` | la pieza se queda con lo que cae adentro del contorno, que la atraviesa a lo largo de `axis` (0, 1, 2: x, y, z locales). `outline`: puntos `[u, v]` de 0 a 1 sobre los otros dos ejes, en orden |
 | `{ kind: 'hole', axis, side, at, diameter, depth? }` | un agujero que entra por la cara `side` (1 o -1) de `axis`, en `at = [u, v]` de 0 a 1 sobre esa cara; sin `depth`, pasante |
+| `{ kind: 'trim', against, mode? }` | la pieza pierde el volumen de la pieza `against` donde se cruzan: el de su caja (`'box'`, por defecto) o el de su forma (`'shape'`) |
 
 - **Las operaciones sobreviven a estirar:** las posiciones van normalizadas sobre el bruto, así
   que `resize` las reaplica. Lo que no se estira (un diámetro, una profundidad) va en la unidad
@@ -348,6 +349,12 @@ p.removeOperation('O-2');   // vuelve exactamente a la forma de antes
   ```
 
   Recibe y devuelve mallas (`{ positions, indices }`) en el marco de la pieza.
+- **Recortes:** dependen de dónde está la otra pieza *respecto de esta*. Mover la otra los
+  recalcula (y el visor rehace la malla); mover o girar el ensamble que contiene a las dos, no. Si
+  se borra la otra, el recorte se quita en el mismo paso (deshacer devuelve las dos). En una
+  instancia, el recorte es contra la pieza de la misma instancia. Un par donde alguna pieza tiene
+  recortes se mira con su forma real en el contacto y el choque (`exact: false` fuerza las cajas):
+  dos largueros cruzados, después de recortar uno contra el otro, se tocan y no chocan.
 - **La forma se cachea** mientras no cambie lo que la define (medidas, forma del bruto,
   operaciones): mover o renombrar la pieza no la recalcula, las instancias comparten la de su
   fuente y deshacer vuelve a encontrar la de antes.
@@ -517,7 +524,7 @@ Dicho para que nadie lo dé por hecho:
 - **El contacto, por defecto, es el de la caja de cada pieza** (rápido, y exacto para una tabla).
   El de la forma real se pide con `{ exact: true }`. Un contacto de cara entre dos piezas partidas
   en convexos puede salir en varios pedazos (uno por pedazo que apoya).
-- **No hay fijaciones, juntas de movimiento, vínculos ni recortes.** Son relaciones
+- **No hay fijaciones, juntas de movimiento ni vínculos.** Son relaciones
   entre partes, y cada una va a entrar siguiendo la regla de arriba.
 
 ## Licencia

@@ -1211,7 +1211,7 @@ test('las operaciones no cambian el bruto: ni las medidas, ni dims, ni la caja; 
   assert.ok(p.vertices.some((v) => Math.abs(v.y - 2.25) < 1e-9 && Math.abs(v.x - 30) < 1e-9), 'uno a media altura, donde el contorno baja');
   assert.deepEqual(p.operations.map((o) => [o.id, o.kind]), [['O-1', 'cut']]);
   assert.ok(Object.isFrozen(p.operations) && Object.isFrozen(p.operations[0]));
-  assert.deepEqual(OPERATION_KINDS, ['cut', 'hole']);
+  assert.deepEqual(OPERATION_KINDS, ['cut', 'hole', 'trim']);
 });
 
 test('sin operaciones la forma es la caja; con un corte, la extrusión del contorno (sin kernel)', () => {
@@ -1727,6 +1727,126 @@ test('orient: la cara de A sobre la de B, enfrentadas, con los centros juntos; f
   assert.ok(a.directions.length.equals(largo.reverse(), 1e-9), 'con flip, el largo queda al revés');
   const mismoLado = Transform.orient(caraA, caraB, { faceToward: false });
   assert.ok(caraA.normal.transform(mismoLado).equals(caraB.normal, 1e-9));
+});
+
+// ---------- recortes: una pieza pierde el volumen de otra ----------
+
+/** Dos largueros cruzados en la misma altura: a lo largo de x y de z. */
+const cruzados = (t) => {
+  const a = t.addPiece({ name: 'A', size: [100, 4, 4], center: [0, 2, 0] });
+  const b = t.addPiece({ name: 'B', size: [4, 4, 100], center: [0, 2, 0] });
+  return { a, b };
+};
+
+test('dos largueros cruzados: después de recortar no hay intersección entre ellos y sí hay contacto', () => {
+  const t = createWorkshop();
+  const { a, b } = cruzados(t);
+  assert.ok(a.intersects(b));
+  a.addOperation({ kind: 'trim', against: b.id });
+  assert.ok(!a.intersects(b), 'con un recorte, el choque se mira con la forma real');
+  assert.ok(a.touches(b));
+  assert.equal(t.collisions().length, 0);
+  assert.ok(t.contacts().every((c) => c.kind === 'face'), 'tocan cara contra cara');
+  cerca([a.local.solid.volume], [100 * 16 - 4 * 16], 1e-9, 'perdió el pedazo de B');
+  assert.ok(a.intersects(b, { exact: false }), 'exact: false fuerza las cajas');
+  assert.deepEqual(a.dims, { length: 100, width: 4, thickness: 4 }, 'el bruto no cambia');
+});
+
+test('mover la otra pieza recalcula; mover el ensamble que contiene a las dos, no', () => {
+  const t = createWorkshop();
+  const { a, b } = cruzados(t);
+  a.addOperation({ kind: 'trim', against: b.id });
+  const antes = a.local.solid;
+  b.move([0, 3, 0]);                     // sube 3: solo 1 de su espesor sigue adentro de A
+  cerca([a.local.solid.volume], [100 * 16 - 4 * 4], 1e-9);
+  const ahora = a.local.solid;
+  const e = t.assemble([a, b]);
+  e.rotate(90, 'y').move([10, 0, 0]);
+  assert.equal(a.local.solid, ahora, 'la misma: no se recalculó');
+  assert.deepEqual(pts(a.local.vertices), pts(a.local.vertices));
+  assert.notEqual(antes, ahora);
+});
+
+test('sacar el recorte devuelve la forma original', () => {
+  const t = createWorkshop();
+  const { a, b } = cruzados(t);
+  const original = a.local.solid.positions;
+  a.addOperation({ kind: 'trim', against: b.id });
+  a.removeOperation('O-1');
+  assert.deepEqual(a.local.solid.positions, original);
+});
+
+test('borrar la otra pieza quita el recorte, en el mismo paso: deshacer devuelve las dos', () => {
+  const t = createWorkshop();
+  const { a, b } = cruzados(t);
+  a.addOperation({ kind: 'trim', against: b.id });
+  const ev = [];
+  t.on((x) => ev.push(x));
+  b.remove();
+  assert.deepEqual(a.operations, []);
+  assert.ok(ev.some((x) => x.type === 'operation' && x.ids.includes(a.id)), 'avisa que A cambió');
+  t.undo();
+  assert.deepEqual(a.operations.map((o) => o.kind), ['trim']);
+  assert.ok(!a.intersects(b));
+});
+
+test('mover la otra pieza avisa también por la que se recorta (para que el visor rehaga su malla)', () => {
+  const t = createWorkshop();
+  const { a, b } = cruzados(t);
+  a.addOperation({ kind: 'trim', against: b.id });
+  const ev = [];
+  t.on((x) => ev.push(x));
+  b.move([0, 1, 0]);
+  assert.ok(ev.at(-1).ids.includes(a.id));
+});
+
+test('recortar con la forma real de la otra (mode: shape)', () => {
+  const t = createWorkshop();
+  const tabla = t.addPiece({ size: [40, 2, 40], center: [0, 1, 0] });
+  const barra = t.addPiece({ size: [4, 4, 60], shape: BARRA(2), center: [0, 2, 0] }); // atraviesa la tabla por su eje
+  tabla.addOperation({ kind: 'trim', against: barra.id, mode: 'shape' });
+  cerca([tabla.local.solid.volume], [40 * 2 * 40 - 40 * poligono(2) / 2], 1e-6, 'pierde la media barra que tiene adentro');
+  const t2 = createWorkshop();
+  const tabla2 = t2.addPiece({ size: [40, 2, 40], center: [0, 1, 0] });
+  const barra2 = t2.addPiece({ size: [4, 4, 60], shape: BARRA(2), center: [0, 2, 0] });
+  tabla2.addOperation({ kind: 'trim', against: barra2.id });
+  cerca([tabla2.local.solid.volume], [40 * 2 * 40 - 40 * 2 * 4], 1e-6, 'con la caja (por defecto), pierde la caja');
+});
+
+test('recortes: errores claros', () => {
+  const t = createWorkshop();
+  const { a } = cruzados(t);
+  assert.throws(() => a.addOperation({ kind: 'trim', against: a.id }), /contra sí misma/);
+  assert.throws(() => a.addOperation({ kind: 'trim', against: 'P-99' }), /no existe la parte P-99/);
+  assert.throws(() => a.addOperation({ kind: 'trim', against: 'P-2', mode: 'casi' }), /mode casi/);
+  assert.deepEqual(a.operations, []);
+});
+
+test('en una instancia, el recorte es contra la pieza de la misma instancia', () => {
+  const t = createWorkshop();
+  const { a, b } = cruzados(t);
+  a.addOperation({ kind: 'trim', against: b.id });
+  const e = t.assemble([a, b]);
+  const [i] = t.array(e, { type: 'linear', count: 2, direction: [1, 0, 0], distance: 300 });
+  const copiaA = i.children.find((x) => x.source.id === a.id);
+  cerca([copiaA.local.solid.volume], [a.local.solid.volume], 1e-9);
+  assert.ok(!copiaA.intersects(i.children.find((x) => x.source.id === b.id)));
+  assert.ok(copiaA.intersects(b, { exact: false }) === false, 'y con la B de afuera ni se cruza');
+});
+
+test('con kernel, el recorte resta la otra pieza (llevada al marco de esta)', () => {
+  const llamadas = [];
+  const kernel = {
+    intersect: (x) => x,
+    subtract: (x, y) => { llamadas.push(y.boundingBox); return { positions: x.positions, indices: x.indices }; },
+  };
+  const t = createWorkshop({ kernel });
+  const { a, b } = cruzados(t);
+  b.move([10, 0, 0]);
+  a.addOperation({ kind: 'trim', against: b.id }).addOperation({ kind: 'hole', axis: 0, side: 1, at: [0.5, 0.5], diameter: 1 });
+  a.local.solid;
+  assert.equal(llamadas.length, 2);
+  cerca([llamadas[0].center.x, llamadas[0].min.z, llamadas[0].max.z], [10, -50, 50], 1e-9, 'la caja de B, en el marco de A');
 });
 
 // ---------- que el SDK siga siendo puro ----------
