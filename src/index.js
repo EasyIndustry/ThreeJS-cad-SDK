@@ -32,14 +32,15 @@ import { TOLERANCE_PRESETS, GRAB_RATIO, tolerancesFor } from './config.js';
 import { closestFeature, rayMesh, rayBox } from './grab.js';
 import { snapMove, pushOutMove, dropMove, guides } from './placement.js';
 import { cutPlanes, stretchPlan } from './stretch.js';
+import { RELATION_KINDS, JOINT_TYPES, jointMotion, clampTo, hingeCandidates, slideCandidates, anchorDelta, distribute, crossing } from './relations.js';
 import { solidOf, convexPartsOf, checkKernel, OPERATION_KINDS } from './solid.js';
 import { SECTIONS, checkShape, resolveSection } from './sections.js';
 import { featuresOf } from './features.js';
 import { transformConvex, depth as hondura, contacts as contactosConvexos, intersect as cruce, volume as volumen } from './convex.js';
-import { apply, invert, compose, rotate as rotar, transpose3 } from './frame.js';
+import { apply, invert, compose, rotate as rotar, transpose3, frame as marco } from './frame.js';
 import { help } from './help.js';
 
-export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, Mesh, OPERATION_KINDS, SECTIONS, arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, GRAB_RATIO, tolerancesFor };
+export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, Mesh, OPERATION_KINDS, SECTIONS, arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, GRAB_RATIO, tolerancesFor, RELATION_KINDS, JOINT_TYPES };
 
 /** @typedef {import('./model.js').Space} Space */
 /** @typedef {import('./geometry.js').PointLike} PointLike */
@@ -57,11 +58,12 @@ export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Interse
 /** @typedef {import('./features.js').Features} Features */
 /** @typedef {import('./convex.js').Convex} Convex */
 
-/** @typedef {{ model: Model, part: (id: string) => Part, forget: (ids: string[]) => void, tolerances: () => Readonly<Tolerances>, checkSection: (shape: unknown, size?: [number, number, number]) => unknown,
+/** @typedef {import('./model.js').RelationDef} RelationDef */
+/** @typedef {{ model: Model, part: (id: string) => Part, relation: (id: string) => Relation, forget: (ids: string[]) => void, tolerances: () => Readonly<Tolerances>, checkSection: (shape: unknown, size?: [number, number, number]) => unknown,
  *             solid: (id: string) => Mesh, features: (id: string) => Features, convex: (id: string) => Convex[], sections: Readonly<Record<string, SectionFn>> }} Ctx */
-/** El documento al que pertenece cada parte, sin colgárselo a la parte a la vista. @type {WeakMap<Part, Ctx>} */
+/** El documento al que pertenece cada parte (o relación), sin colgárselo a la vista. @type {WeakMap<Part | Relation, Ctx>} */
 const ctxOf = new WeakMap();
-/** @param {Part} p */
+/** @param {Part | Relation} p */
 const ctx = (p) => /** @type {Ctx} */ (ctxOf.get(p));
 const AXES = /** @type {const} */ (['x', 'y', 'z']);
 
@@ -553,6 +555,19 @@ export class Piece extends Part {
   updateOperation(id, op) { ctx(this).model.updateOperation(this.id, id, op); return this; }
   /** Saca una operación: la forma vuelve a la de antes de ella. @param {string} id */
   removeOperation(id) { ctx(this).model.removeOperation(this.id, id); return this; }
+  /**
+   * Cuánto material atraviesa la recta que pasa por `point` en la dirección `direction` (en el
+   * mundo): el tramo de su forma real que contiene al punto, o que empieza o termina en él. En
+   * una pieza maciza es su sombra sobre esa dirección; en un caño, la pared. null si no la toca.
+   * @param {PointLike} point @param {VectorLike} direction
+   */
+  thicknessAt(point, direction) {
+    const W = ctx(this).model.worldFrame(this.id);
+    const d = vec3(direction, 'dirección'), L = Math.hypot(...d);
+    if (!L) throw new Error('la dirección no puede ser nula');
+    const dl = rotar(transpose3(W.r), /** @type {[number, number, number]} */ (d.map((x) => x / L)));
+    return crossing(this.#solid(), apply(invert(W), vec3(point, 'punto')), dl);
+  }
 
   /** @param {{ print?: boolean }} [opts] */
   static help(opts) { return help('Piece — una pieza: lo que se corta', [...Piece.members, ...Part.members], opts); }
@@ -575,6 +590,7 @@ export class Piece extends Part {
     ['addOperation(op)', "agregar una operación: { kind: 'cut', axis, outline } o { kind: 'hole', axis, side, at, diameter, depth? }"],
     ['updateOperation(id, op)', 'reemplazar una operación, en su lugar'],
     ['removeOperation(id)', 'sacar una operación: la forma vuelve a la de antes'],
+    ['thicknessAt(point, direction)', 'cuánto material atraviesa la recta por point en esa dirección (la pared, si es un caño), o null'],
     ['static help()', 'esta tabla, sin crear una pieza'],
   ];
 }
@@ -722,6 +738,351 @@ export class Assembly extends Part {
   ];
 }
 
+
+// ---------- relaciones ----------
+// Una relación vive en el documento entre partes guardadas: se deshace, se guarda, y se limpia
+// sola si se borra una de sus partes. Las de adentro de la fuente de una instancia se ven en la
+// instancia con ids de camino (I-1/R-2): se leen, pero se cambian en la fuente.
+
+/** Los ejes como letra o número. @param {unknown} a @returns {0 | 1 | 2} */
+function ejeDe(a) {
+  const k = typeof a === 'number' ? a : ({ x: 0, y: 1, z: 2 })[/** @type {string} */ (a)];
+  if (k !== 0 && k !== 1 && k !== 2) throw new TypeError(`eje inválido: ${String(a)} (va 'x', 'y', 'z' de la pieza, o 0, 1, 2)`);
+  return /** @type {0 | 1 | 2} */ (k);
+}
+
+/** Una cara de una pieza, pedida como Face (de `pieza.faces`) o como { axis, side } en su marco. @param {unknown} f @returns {{ axis: 0 | 1 | 2, side: 1 | -1, piece: string | null }} */
+function caraPedida(f) {
+  if (f instanceof Face) {
+    if (!f.localAxis || !f.localSide) throw new Error('esa cara no mira hacia un eje de la pieza: va una cara plana alineada a sus ejes');
+    return { axis: ejeDe(f.localAxis), side: f.localSide, piece: f.piece };
+  }
+  const o = /** @type {Record<string, unknown>} */ (f ?? {});
+  const axis = ejeDe(o.axis ?? o.localAxis);
+  const side = o.side ?? o.localSide;
+  if (side !== 1 && side !== -1) throw new TypeError(`lado inválido: ${String(side)} (va 1 o -1)`);
+  return { axis, side, piece: null };
+}
+
+/** @param {unknown} m @returns {Record<string, any> | null} */
+const metaDe = (m) => {
+  if (m === undefined || m === null) return null;
+  if (typeof m !== 'object' || Array.isArray(m)) throw new TypeError('meta va como un objeto (lo que la app quiera guardar con la relación)');
+  return JSON.parse(JSON.stringify(m));
+};
+
+/** @template T @param {T} o @returns {T} */
+const congelado = (o) => {
+  if (o && typeof o === 'object' && !Object.isFrozen(o)) { Object.freeze(o); for (const v of Object.values(o)) congelado(v); }
+  return o;
+};
+
+/**
+ * Lo común a toda relación: de qué tipo es, entre qué partes, si vale y lo que la app guardó.
+ * No se construye a mano: sale de `taller.addJoint`, `addFixing`, `addLink` o `taller.relation(id)`.
+ */
+export class Relation {
+  /** @param {Ctx} c @param {string} id */
+  constructor(c, id) {
+    ctxOf.set(this, c);
+    /** @readonly */ this.id = id;
+    Object.freeze(this);
+  }
+  /** @returns {RelationDef} */
+  get record() { return ctx(this).model.relation(this.id); }
+  /** 'joint', 'fixing', 'link' (o el tipo que haya guardado la app). */
+  get kind() { return this.record.kind; }
+  /** Las partes que relaciona. @returns {readonly Part[]} */
+  get parts() { return Object.freeze(this.record.parts.map((p) => ctx(this).part(p))); }
+  /** null si vale; si no, por qué. */
+  get broken() { return this.record.broken; }
+  /** Lo que la app guardó con ella (el SDK no lo lee). */
+  get meta() { return this.record.meta; }
+  /** ¿Es de adentro de una instancia? Entonces se lee, pero se cambia en la fuente. */
+  get isVirtual() { return this.id.includes('/'); }
+  /** Cambia lo que la app guarda con ella. @param {Record<string, any> | null} meta */
+  setMeta(meta) { ctx(this).model.updateRelation(this.id, { meta: metaDe(meta) }); return this; }
+  /** La borra (con las operaciones que son de ella, como los agujeros de una unión). */
+  remove() { ctx(this).model.removeRelation(this.id); }
+  toString() { const r = this.record; return `${r.kind} ${this.id} entre ${r.parts.join(', ')}${r.broken ? ` (rota: ${r.broken})` : ''}`; }
+
+  /** @param {{ print?: boolean }} [opts] */
+  static help(opts) { return help('Relation — una relación entre partes', Relation.members, opts); }
+  /** @param {{ print?: boolean }} [opts] */
+  help(opts) { return /** @type {typeof Relation} */ (this.constructor).help(opts); }
+
+  /** @type {Member[]} */
+  static members = [
+    ['id', 'su identificador (R-1…; I-1/R-2 si es de adentro de una instancia)'],
+    ['record', 'lo guardado, tal cual: { id, kind, parts, data, ops, broken, meta }'],
+    ['kind', "'joint', 'fixing' o 'link'"],
+    ['parts', 'las partes que relaciona'],
+    ['broken', 'null si vale; si no, por qué'],
+    ['meta', 'lo que la app guardó con ella (el SDK no lo lee)'],
+    ['isVirtual', '¿es de adentro de una instancia? (se lee; se cambia en la fuente)'],
+    ['setMeta(meta)', 'cambiar lo que la app guarda con ella'],
+    ['remove()', 'borrarla, con las operaciones que son de ella'],
+    ['toString()', 'para leer'],
+    ['help()', 'esta tabla'],
+    ['static help()', 'esta tabla, sin crear una relación'],
+  ];
+}
+
+/**
+ * Una junta: la parte móvil gira sobre un eje (revolute: una bisagra) o corre a lo largo de una
+ * dirección (prismatic: una corredera) respecto de la base. El eje vive en el marco de la base,
+ * así que sigue al mueble como esté. El documento guarda la junta cerrada; abrirla es `at(value)`,
+ * que no cambia nada.
+ */
+export class Joint extends Relation {
+  /** 'revolute' o 'prismatic'. @returns {'revolute' | 'prismatic'} */
+  get type() { return this.record.data.type; }
+  get moving() { return ctx(this).part(this.record.parts[0]); }
+  get base() { return ctx(this).part(this.record.parts[1]); }
+  /** El eje en el mundo: una Line desde un punto del eje, de largo 1 en su dirección. */
+  get axis() {
+    const { origin, direction } = this.#ejeMundo();
+    return new Line(origin, origin.map((x, k) => x + direction[k]));
+  }
+  /** { min, max } (grados o unidades del documento), o null si no tiene. */
+  get limits() { const l = this.record.data.limits; return l ? Object.freeze({ min: l[0], max: l[1] }) : null; }
+  #ejeMundo() {
+    const m = ctx(this).model, d = this.record.data, W = m.worldFrame(this.record.parts[1]);
+    return { origin: apply(W, d.origin), direction: rotar(W.r, d.direction) };
+  }
+  /** @param {{ min: number, max: number } | [number, number] | null} limits */
+  setLimits(limits) {
+    const r = this.record;
+    ctx(this).model.updateRelation(this.id, { data: { ...r.data, limits: limitesDe(limits) } });
+    return this;
+  }
+  /**
+   * La junta abierta en `value` (grados si gira, unidades del documento si corre), limitado a sus
+   * límites: el Transform que se le aplica a la parte móvil y la colocación de cada pieza suya en
+   * el mundo. No cambia el modelo: es para animar.
+   * @param {number} value
+   */
+  at(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) throw new TypeError(`valor inválido: ${String(value)}`);
+    const c = ctx(this), m = c.model, r = this.record;
+    const v = clampTo(value, r.data.limits);
+    const { origin, direction } = this.#ejeMundo();
+    const T = jointMotion(r.data.type, origin, direction, v);
+    /** @type {Record<string, Transform>} */
+    const placements = {};
+    for (const p of m.piecesOf(r.parts[0])) placements[p.id] = new Transform(compose(T, m.worldFrame(p.id)));
+    return Object.freeze({ value: v, limited: v !== value, transform: new Transform(T), placement: new Transform(compose(T, m.worldFrame(r.parts[0]))), placements: Object.freeze(placements) });
+  }
+
+  /** @param {{ print?: boolean }} [opts] */
+  static help(opts) { return help('Joint — una junta: bisagra (revolute) o corredera (prismatic)', [...Joint.members, ...Relation.members], opts); }
+
+  /** @type {Member[]} */
+  static members = [
+    ['type', "'revolute' (gira) o 'prismatic' (corre)"],
+    ['moving', 'la parte que se mueve'],
+    ['base', 'la parte respecto de la cual se mueve (el eje vive en su marco)'],
+    ['axis', 'el eje en el mundo (Line de largo 1 en su dirección)'],
+    ['limits', '{ min, max } en grados o unidades del documento, o null'],
+    ['setLimits(limits)', 'cambiarle los límites ({ min, max }, [min, max] o null)'],
+    ['at(value)', 'abierta en value, sin cambiar nada: { value, limited, transform, placement, placements: { [id de pieza]: Transform } }'],
+  ];
+}
+
+/**
+ * Una unión (fijación) entre dos piezas que se tocan cara con cara: `a` es por donde entra (la
+ * cabeza queda en su cara de afuera) y `b`, donde agarra. Sus puntos van normalizados sobre el
+ * parche de contacto, así que siguen en su lugar al estirar o girar. Si las piezas se separan, se
+ * marca rota (o se borra, según `policy`). Sus agujeros son operaciones de las dos piezas.
+ */
+export class Fixing extends Relation {
+  get a() { return /** @type {Piece} */ (ctx(this).part(this.record.parts[0])); }
+  get b() { return /** @type {Piece} */ (ctx(this).part(this.record.parts[1])); }
+  /** 'break' (queda rota si se separan) o 'remove' (se borra). */
+  get policy() { return this.record.data.policy; }
+  /** Cuántos puntos reparte sola, o null si van puestos a mano. */
+  get count() { return this.record.data.count; }
+  /** Los agujeros que hace en cada pieza: { a: { diameter, depth? } | null, b: … }. */
+  get holes() { return congelado(JSON.parse(JSON.stringify(this.record.data.holes))); }
+  /** Dónde está ahora: el parche de contacto, la dirección de entrada y sus puntos. null si las piezas no se tocan. */
+  get placement() { return ubicarUnion(ctx(this), this.record); }
+  /** Hacia dónde entra, de a hacia b (Vector3d), o null si no se tocan. */
+  get direction() { return this.placement?.direction ?? null; }
+  /**
+   * Sus puntos: { uv (normalizado sobre el parche), point (en el mundo), thickness: { a, b } (lo
+   * que atraviesa de cada pieza en la dirección de entrada) }. Vacío si no se tocan.
+   */
+  get points() {
+    const u = this.placement;
+    if (!u) return Object.freeze([]);
+    const c = ctx(this), [pa, pb] = this.record.parts;
+    const A = /** @type {Piece} */ (c.part(pa)), B = /** @type {Piece} */ (c.part(pb));
+    return Object.freeze(u.points.map((p) => Object.freeze({
+      uv: p.uv, point: p.point,
+      thickness: Object.freeze({ a: A.thicknessAt(p.point, u.direction), b: B.thicknessAt(p.point, u.direction) }),
+    })));
+  }
+  /**
+   * Cambia sus puntos, su reparto, sus agujeros o su política. Lo que no se pasa queda.
+   * @param {{ points?: [number, number][], count?: number, holes?: { a?: { diameter: number, depth?: number } | null, b?: { diameter: number, depth?: number } | null }, policy?: 'break' | 'remove' }} cambios
+   */
+  update(cambios) {
+    const r = ctx(this).model.ownRelation(this.id);
+    ctx(this).model.updateRelation(this.id, { data: datosDeUnion({ ...r.data, ...cambiosDeUnion(cambios) }) });
+    return this;
+  }
+
+  /** @param {{ print?: boolean }} [opts] */
+  static help(opts) { return help('Fixing — una unión entre dos piezas que se tocan', [...Fixing.members, ...Relation.members], opts); }
+
+  /** @type {Member[]} */
+  static members = [
+    ['a', 'la pieza por donde entra (la cabeza queda en su cara de afuera)'],
+    ['b', 'la pieza donde agarra'],
+    ['policy', "'break' (si se separan queda rota) o 'remove' (se borra)"],
+    ['count', 'cuántos puntos reparte sola, o null si van puestos a mano'],
+    ['holes', 'los agujeros en cada pieza: { a: { diameter, depth? } | null, b: … }'],
+    ['placement', 'dónde está ahora: { patch, faceA, faceB, direction, points }, o null si no se tocan'],
+    ['direction', 'hacia dónde entra, de a hacia b (Vector3d), o null'],
+    ['points', 'sus puntos: { uv, point, thickness: { a, b } }'],
+    ['update({ points?, count?, holes?, policy? })', 'cambiar sus puntos, su reparto, sus agujeros o su política'],
+  ];
+}
+
+/**
+ * Un vínculo: una punta de la pieza `moving` anclada a una cara de la pieza `base`, a `gap` de
+ * ella (hacia afuera de la base; 0: al ras; negativo: se mete). Con una punta anclada sobre un eje,
+ * la pieza se mueve; con las dos, se estira entre las dos caras. Se resuelve solo después de cada
+ * cambio, en cascada y en el mismo paso de deshacer.
+ */
+export class Link extends Relation {
+  get base() { return /** @type {Piece} */ (ctx(this).part(this.record.parts[0])); }
+  get moving() { return /** @type {Piece} */ (ctx(this).part(this.record.parts[1])); }
+  /** La cara de la base, en su marco: { localAxis, localSide }. */
+  get face() { const f = this.record.data.face; return Object.freeze({ localAxis: AXES[f[0]], localSide: f[1] }); }
+  /** La punta anclada de la móvil, en su marco: { localAxis, localSide }. */
+  get end() { const f = this.record.data.end; return Object.freeze({ localAxis: AXES[f[0]], localSide: f[1] }); }
+  /** La separación, hacia afuera de la base. */
+  get gap() { return this.record.data.gap; }
+  /** @param {number} gap */
+  setGap(gap) {
+    if (typeof gap !== 'number' || !Number.isFinite(gap)) throw new TypeError(`separación inválida: ${String(gap)}`);
+    const r = ctx(this).model.ownRelation(this.id);
+    ctx(this).model.updateRelation(this.id, { data: { ...r.data, gap } });
+    return this;
+  }
+
+  /** @param {{ print?: boolean }} [opts] */
+  static help(opts) { return help('Link — la punta de una pieza anclada a la cara de otra', [...Link.members, ...Relation.members], opts); }
+
+  /** @type {Member[]} */
+  static members = [
+    ['base', 'la pieza de la cara (la que manda)'],
+    ['moving', 'la pieza anclada (la que sigue)'],
+    ['face', 'la cara de la base: { localAxis, localSide }'],
+    ['end', 'la punta anclada de la móvil: { localAxis, localSide }'],
+    ['gap', 'la separación, hacia afuera de la base (0: al ras; negativo: se mete)'],
+    ['setGap(gap)', 'cambiar la separación'],
+  ];
+}
+
+/** @param {unknown} l @returns {[number, number] | null} */
+function limitesDe(l) {
+  if (l === null || l === undefined) return null;
+  const par = Array.isArray(l) ? l : [/** @type {any} */ (l).min, /** @type {any} */ (l).max];
+  if (par.length !== 2 || !par.every((x) => typeof x === 'number' && !Number.isNaN(x)) || par[0] > par[1]) {
+    throw new TypeError(`límites inválidos: ${JSON.stringify(l)} (van { min, max } con min ≤ max, o null)`);
+  }
+  return [par[0], par[1]];
+}
+
+/** @param {unknown} h @returns {{ diameter: number, depth?: number } | null} */
+function agujeroDe(h) {
+  if (h === null || h === undefined) return null;
+  const o = /** @type {Record<string, unknown>} */ (h);
+  if (typeof o.diameter !== 'number' || !(o.diameter > 0)) throw new TypeError(`agujero inválido: ${JSON.stringify(h)} (va { diameter, depth? }, en la unidad del documento)`);
+  if (o.depth !== undefined && (typeof o.depth !== 'number' || !(o.depth > 0))) throw new TypeError(`profundidad inválida: ${String(o.depth)} (sin depth, el agujero es pasante)`);
+  return o.depth === undefined ? { diameter: o.diameter } : { diameter: o.diameter, depth: o.depth };
+}
+
+/** Lo que se puede cambiar de una unión, revisado. @param {Record<string, any>} c */
+function cambiosDeUnion(c) {
+  /** @type {Record<string, any>} */
+  const out = {};
+  if (c.points !== undefined) { out.points = c.points; out.count = null; }
+  if (c.count !== undefined) { out.count = c.count; out.points = null; }
+  if (c.holes !== undefined) out.holes = c.holes;
+  if (c.policy !== undefined) out.policy = c.policy;
+  return out;
+}
+
+/** Los datos de una unión, revisados. @param {Record<string, any>} d */
+function datosDeUnion(d) {
+  const policy = d.policy ?? 'break';
+  if (policy !== 'break' && policy !== 'remove') throw new TypeError(`política inválida: ${String(policy)} (va 'break' o 'remove')`);
+  /** @type {[number, number][] | null} */
+  let points = null;
+  let count = null;
+  if (d.points) {
+    if (!Array.isArray(d.points) || !d.points.length) throw new TypeError('points va como una lista de [u, v] normalizados');
+    points = d.points.map((/** @type {unknown} */ p, /** @type {number} */ i) => {
+      if (!Array.isArray(p) || p.length !== 2 || !p.every((x) => typeof x === 'number' && x >= 0 && x <= 1)) throw new RangeError(`punto ${i} inválido: ${JSON.stringify(p)} (va [u, v], de 0 a 1 sobre el parche)`);
+      return /** @type {[number, number]} */ ([p[0], p[1]]);
+    });
+  } else {
+    count = d.count ?? 1;
+    if (!Number.isInteger(count) || count < 1) throw new TypeError(`count inválido: ${String(count)} (va un entero de 1 o más)`);
+  }
+  const h = d.holes ?? {};
+  return { points, count, holes: { a: agujeroDe(h.a), b: agujeroDe(h.b) }, policy };
+}
+
+/**
+ * Dónde está ahora una unión: el contacto de cara entre sus piezas (el más grande), el parche en
+ * el marco de `a`, la dirección de entrada y sus puntos en el mundo. null si no se tocan.
+ * @param {Ctx} c @param {RelationDef} r
+ */
+function ubicarUnion(c, r) {
+  const m = c.model, [a, b] = r.parts;
+  const t = c.tolerances();
+  const ks = contactos(c, [a], [b], t.touch, t.penetration).filter((k) => k.kind === 'face' && k.faceA && k.faceB);
+  if (!ks.length) return null;
+  const k = ks.reduce((x, y) => (y.area > x.area ? y : x));
+  const [fa, fb] = k.a === a ? [k.faceA, k.faceB] : [k.faceB, k.faceA];
+  const caraA = { axis: ejeDe(/** @type {any} */ (fa).localAxis), side: /** @type {1 | -1} */ (/** @type {any} */ (fa).localSide) };
+  const caraB = { axis: ejeDe(/** @type {any} */ (fb).localAxis), side: /** @type {1 | -1} */ (/** @type {any} */ (fb).localSide) };
+  const WA = m.worldFrame(a), invA = invert(WA), sizeA = m.piece(a).size;
+  const [u, v] = /** @type {(0 | 1 | 2)[]} */ ([0, 1, 2].filter((i) => i !== caraA.axis));
+  const loc = k.points.map((p) => apply(invA, /** @type {[number, number, number]} */ (p.toArray())));
+  const lo = [Math.min(...loc.map((q) => q[u])), Math.min(...loc.map((q) => q[v]))];
+  const hi = [Math.max(...loc.map((q) => q[u])), Math.max(...loc.map((q) => q[v]))];
+  /** @type {[number, number][]} */
+  const uvs = r.data.points ?? distribute(r.data.count, hi[0] - lo[0], hi[1] - lo[1]);
+  /** @type {[number, number, number]} */ const n = [0, 0, 0];
+  n[caraA.axis] = caraA.side;
+  const direction = new Vector3d(...rotar(WA.r, n));
+  const points = uvs.map((/** @type {[number, number]} */ uv) => {
+    /** @type {[number, number, number]} */ const q = [0, 0, 0];
+    q[caraA.axis] = (caraA.side * sizeA[caraA.axis]) / 2;
+    q[u] = lo[0] + uv[0] * (hi[0] - lo[0]);
+    q[v] = lo[1] + uv[1] * (hi[1] - lo[1]);
+    return Object.freeze({ uv: Object.freeze([...uv]), point: new Point3d(...apply(WA, q)) });
+  });
+  return Object.freeze({
+    patch: Object.freeze({ min: Object.freeze(lo), max: Object.freeze(hi), axes: Object.freeze([AXES[u], AXES[v]]) }),
+    faceA: Object.freeze({ localAxis: AXES[caraA.axis], localSide: caraA.side }), faceB: Object.freeze({ localAxis: AXES[caraB.axis], localSide: caraB.side }),
+    direction, points: Object.freeze(points), caraA, caraB,
+  });
+}
+
+/** Dónde cae un punto del mundo sobre la cara `axis` de una pieza, normalizado (lo que va en `at`). @param {Model} m @param {string} id @param {0 | 1 | 2} axis @param {Point3d} p */
+function enLaCara(m, id, axis, p) {
+  const q = apply(invert(m.worldFrame(id)), /** @type {[number, number, number]} */ (p.toArray()));
+  const size = m.piece(id).size;
+  const a01 = (/** @type {number} */ x) => Math.min(1, Math.max(0, Math.round(x * 1e12) / 1e12));
+  return /** @type {[number, number]} */ ([0, 1, 2].filter((i) => i !== axis).map((i) => a01((q[i] + size[i] / 2) / size[i])));
+}
+
 /**
  * Un documento: el árbol de partes y la puerta de entrada a todo lo demás.
  *
@@ -830,6 +1191,8 @@ export function createWorkshop(init = {}) {
   tolerancesFor(model.units, override); // que un valor inválido falle al crear, no en la primera pregunta
   /** @type {Map<string, Part>} */
   const cache = new Map();
+  /** @type {Map<string, Relation>} */
+  const relCache = new Map();
   /** @type {Ctx} */
   const c = {
     model,
@@ -857,7 +1220,165 @@ export function createWorkshop(init = {}) {
       }
       return h;
     },
+    relation(id) {
+      const kind = model.relation(id).kind;
+      let h = relCache.get(id);
+      if (!h || h.kind !== kind) {
+        h = kind === 'joint' ? new Joint(c, id) : kind === 'fixing' ? new Fixing(c, id) : kind === 'link' ? new Link(c, id) : new Relation(c, id);
+        relCache.set(id, h);
+      }
+      return h;
+    },
     forget(ids) { for (const id of ids) cache.delete(id); },
+  };
+
+  // ---------- poner en orden las relaciones, después de cada cambio ----------
+
+  /** Una cara de una pieza en el mundo: su normal y su centro. @param {string} id @param {0 | 1 | 2} axis @param {1 | -1} side */
+  const caraEnElMundo = (id, axis, side) => {
+    const W = model.worldFrame(id), size = model.piece(id).size;
+    /** @type {[number, number, number]} */ const n = [0, 0, 0];
+    n[axis] = side;
+    /** @type {[number, number, number]} */ const q = [0, 0, 0];
+    q[axis] = (side * size[axis]) / 2;
+    return { n: rotar(W.r, n), p: apply(W, q) };
+  };
+  const PARALELO = 1 - 1e-6;
+  /** @param {readonly number[]} a @param {readonly number[]} b */
+  const pt = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+  /** Los vínculos guardados, la base antes que lo que depende de ella. */
+  const vinculosEnOrden = () => {
+    const ls = [...model.relations.values()].filter((r) => r.kind === 'link');
+    /** @type {Map<string, RelationDef[]>} pieza móvil → sus vínculos */
+    const porMovil = new Map();
+    for (const l of ls) {
+      if (!porMovil.has(l.parts[1])) porMovil.set(l.parts[1], []);
+      /** @type {RelationDef[]} */ (porMovil.get(l.parts[1])).push(l);
+    }
+    /** @type {string[]} */
+    const orden = [];
+    /** @type {Set<string>} */
+    const visto = new Set();
+    /** @param {string} id */
+    const visitar = (id) => {
+      if (visto.has(id)) return;
+      visto.add(id);
+      for (const l of porMovil.get(id) ?? []) visitar(l.parts[0]);
+      if (porMovil.has(id)) orden.push(id);
+    };
+    for (const id of porMovil.keys()) visitar(id);
+    return orden.map((id) => /** @type {[string, RelationDef[]]} */ ([id, /** @type {RelationDef[]} */ (porMovil.get(id))]));
+  };
+
+  /**
+   * Lleva cada pieza anclada a donde dicen sus vínculos: con una punta anclada sobre un eje se
+   * mueve; con las dos, se estira entre las caras. En cascada: la base antes que lo que sigue.
+   */
+  const resolverVinculos = () => {
+    const eps = 1e-9 * escalaDoc();
+    for (const [B, ls] of vinculosEnOrden()) {
+      if (!model.parts.has(B) || model.parts.get(B)?.kind !== 'piece') continue;
+      /** @type {Map<number, RelationDef[]>} */
+      const porEje = new Map();
+      for (const l of ls) {
+        const k = l.data.end[0];
+        if (!porEje.has(k)) porEje.set(k, []);
+        /** @type {RelationDef[]} */ (porEje.get(k)).push(l);
+      }
+      for (const [k, anclas] of porEje) {
+        const W = model.worldFrame(B), size = model.piece(B).size;
+        /** @type {[number, number, number]} */ const d = [W.r[k], W.r[3 + k], W.r[6 + k]];
+        /** @type {Map<number, number>} lado de la punta → cuánto correrla */
+        const deltas = new Map();
+        for (const l of anclas) {
+          const A = l.parts[0];
+          if (model.parts.get(A)?.kind !== 'piece') continue;
+          const f = caraEnElMundo(A, l.data.face[0], l.data.face[1]);
+          if (Math.abs(pt(f.n, d)) < PARALELO) {
+            if (!l.broken) model.updateRelation(l.id, { broken: 'la cara y la punta ya no son paralelas' });
+            continue;
+          }
+          if (l.broken) model.updateRelation(l.id, { broken: null });
+          const s = l.data.end[1];
+          const x0 = /** @type {[number, number, number]} */ (W.t.map((x, i) => x + (d[i] * s * size[k]) / 2));
+          deltas.set(s, anchorDelta(f.n, pt(f.n, f.p) + l.data.gap, x0, d));
+        }
+        const mas = deltas.get(1), menos = deltas.get(-1);
+        const corre = (/** @type {number} */ x) => /** @type {[number, number, number]} */ (d.map((v) => v * x));
+        if (mas !== undefined && menos !== undefined) {
+          const L = size[k] + mas - menos;
+          if (Math.abs(mas - menos) > eps) {
+            if (L < c.tolerances().minLength) throw new Error(`los vínculos de ${B} la dejarían de ${L} sobre ${AXES[k]}: menos que el mínimo (${c.tolerances().minLength})`);
+            const s2 = /** @type {[number, number, number]} */ ([...size]);
+            s2[k] = L;
+            checkSection(model.piece(B).shape, s2);
+            model.resize(B, s2);
+          }
+          if (Math.abs(mas + menos) > eps) model.move(B, corre((mas + menos) / 2));
+        } else {
+          const delta = mas ?? menos;
+          if (delta !== undefined && Math.abs(delta) > eps) model.move(B, corre(delta));
+        }
+      }
+    }
+  };
+
+  /** Lo último que se vio de cada unión, para no recalcular lo que no cambió. @type {Map<string, string>} */
+  const firmasDeUniones = new Map();
+  /** @param {RelationDef} r */
+  const firmaDeUnion = (r) => JSON.stringify([r.data, r.ops, r.broken, ...r.parts.map((p) => {
+    const q = model.parts.get(p);
+    return q?.kind === 'piece' ? [model.worldFrame(p), q.size, q.shape] : null;
+  })]);
+
+  /**
+   * Revisa las uniones: si sus piezas se siguen tocando, pone sus puntos y sus agujeros donde van
+   * ahora; si no, la marca rota o la borra, según su política.
+   */
+  const mantenerUniones = () => {
+    for (const r of [...model.relations.values()]) {
+      if (r.kind !== 'fixing' || !model.relations.has(r.id)) continue;
+      if (!r.parts.every((p) => model.parts.get(p)?.kind === 'piece')) continue;
+      const firma = firmaDeUnion(r);
+      if (firmasDeUniones.get(r.id) === firma) continue;
+      const u = ubicarUnion(c, r);
+      if (!u) {
+        if (r.data.policy === 'remove') model.removeRelation(r.id);
+        else if (!r.broken) model.updateRelation(r.id, { broken: 'las piezas ya no se tocan' });
+        const r2 = model.relations.get(r.id);
+        if (r2) firmasDeUniones.set(r.id, firmaDeUnion(r2));
+        continue;
+      }
+      const [a, b] = r.parts;
+      /** @type {[string, import('./solid.js').HoleOperation][]} */
+      const quiero = [];
+      if (r.data.holes.a) for (const p of u.points) quiero.push([a, { kind: 'hole', axis: u.caraA.axis, side: /** @type {1 | -1} */ (-u.caraA.side), at: enLaCara(model, a, u.caraA.axis, p.point), ...r.data.holes.a }]);
+      if (r.data.holes.b) for (const p of u.points) quiero.push([b, { kind: 'hole', axis: u.caraB.axis, side: u.caraB.side, at: enLaCara(model, b, u.caraB.axis, p.point), ...r.data.holes.b }]);
+      /** @type {[string, string][]} */
+      const ops = [];
+      const tiene = (/** @type {string} */ pieza, /** @type {string} */ op) => (model.piece(pieza).operations ?? []).find((o) => o.id === op);
+      quiero.forEach(([pieza, spec], i) => {
+        const ya = r.ops[i];
+        const actual = ya && ya[0] === pieza ? tiene(pieza, ya[1]) : undefined;
+        if (actual) {
+          const { id: _, ...sinId } = actual;
+          if (JSON.stringify(sinId) !== JSON.stringify(spec)) model.updateOperation(pieza, ya[1], spec);
+          ops.push([pieza, ya[1]]);
+        } else ops.push([pieza, model.addOperation(pieza, spec)]);
+      });
+      for (const [pieza, op] of r.ops.slice(quiero.length)) if (model.parts.has(pieza) && tiene(pieza, op)) model.removeOperation(pieza, op);
+      for (const [i, [pieza, op]] of r.ops.slice(0, quiero.length).entries()) {
+        if (ops[i][1] !== op || ops[i][0] !== pieza) if (model.parts.has(pieza) && tiene(pieza, op)) model.removeOperation(pieza, op);
+      }
+      if (r.broken || JSON.stringify(ops) !== JSON.stringify(r.ops)) model.updateRelation(r.id, { ops, broken: null });
+      firmasDeUniones.set(r.id, firmaDeUnion(/** @type {RelationDef} */ (model.relations.get(r.id))));
+    }
+  };
+
+  model.settler = (phase) => {
+    resolverVinculos();
+    if (phase === 'close') mantenerUniones();
   };
   /** @param {(Part | string)[]} list */
   const ids = (list) => list.map((x) => (typeof x === 'string' ? x : x.id));
@@ -899,6 +1420,80 @@ export function createWorkshop(init = {}) {
     });
     return c.part(id);
   }
+
+  /** La caja de una parte en el marco de otra. @param {string} id @param {import('./frame.js').Frame} inv */
+  const cajaEn = (id, inv) => {
+    const pts = model.positions(id, 'world').map((q) => apply(inv, q));
+    return {
+      min: /** @type {[number, number, number]} */ ([0, 1, 2].map((k) => Math.min(...pts.map((q) => q[k])))),
+      max: /** @type {[number, number, number]} */ ([0, 1, 2].map((k) => Math.max(...pts.map((q) => q[k])))),
+    };
+  };
+
+  /**
+   * ¿Se puede crear este vínculo? Lo que diría addLink, sin crearlo.
+   * @param {{ base: Part | string, face: unknown, moving: Part | string }} spec
+   * @returns {{ ok: true, end: { axis: 0 | 1 | 2, side: 1 | -1 }, face: { axis: 0 | 1 | 2, side: 1 | -1 } } | { ok: false, reason: 'invalid' | 'self' | 'not-parallel' | 'over-constrained' | 'cycle', message: string }}
+   */
+  const revisarVinculo = ({ base, face, moving }) => {
+    /** @param {'invalid' | 'self' | 'not-parallel' | 'over-constrained' | 'cycle'} reason @param {string} message */
+    const no = (reason, message) => /** @type {const} */ ({ ok: false, reason, message });
+    let A, B, f;
+    try {
+      A = idDe(base); B = idDe(moving);
+      model.ownPiece(A); model.ownPiece(B);
+      f = caraPedida(face);
+    } catch (e) {
+      return no('invalid', /** @type {Error} */ (e).message);
+    }
+    if (f.piece && f.piece !== A) return no('invalid', `esa cara es de ${f.piece}, no de la base ${A}`);
+    if (A === B) return no('self', `${A} no se puede anclar a sí misma`);
+    const { n } = caraEnElMundo(A, f.axis, f.side);
+    const W = model.worldFrame(B);
+    const k = /** @type {(0 | 1 | 2)[]} */ ([0, 1, 2]).find((i) => Math.abs(W.r[i] * n[0] + W.r[3 + i] * n[1] + W.r[6 + i] * n[2]) >= PARALELO);
+    if (k === undefined) return no('not-parallel', `ninguna punta de ${B} es paralela a la cara ${f.side > 0 ? '+' : '-'}${AXES[f.axis]} de ${A}`);
+    const side = /** @type {1 | -1} */ (-Math.sign(W.r[k] * n[0] + W.r[3 + k] * n[1] + W.r[6 + k] * n[2]));
+    const ls = [...model.relations.values()].filter((r) => r.kind === 'link');
+    const mismoEje = ls.filter((r) => r.parts[1] === B && r.data.end[0] === k);
+    const misma = mismoEje.find((r) => r.data.end[1] === side);
+    if (misma) return no('over-constrained', `esa punta de ${B} (${side > 0 ? '+' : '-'}${AXES[k]}) ya está anclada por ${misma.id}`);
+    if (mismoEje.length >= 2) return no('over-constrained', `${B} ya tiene sus dos puntas ancladas sobre ${AXES[k]}`);
+    // ¿la base depende (en cascada) de la móvil? Entonces sería un ciclo
+    /** @param {string} x @param {string[]} cam @returns {string[] | null} */
+    const camino = (x, cam) => {
+      if (x === B) return cam;
+      for (const r of ls) if (r.parts[1] === x) { const c2 = camino(r.parts[0], [...cam, r.parts[0]]); if (c2) return c2; }
+      return null;
+    };
+    const ciclo = camino(A, [A]);
+    if (ciclo) return no('cycle', `sería un ciclo: ${[B, ...ciclo].join(' → ')} (cada flecha: depende de)`);
+    return { ok: true, end: { axis: k, side }, face: { axis: f.axis, side: f.side } };
+  };
+
+  /**
+   * Las filas del despiece. Una fila por cada grupo de piezas idénticas: mismo bruto (caja,
+   * perfil o torneado), mismo material y mismo largo × ancho × espesor (los de `dims`).
+   * @param {{ groupBy?: 'identical' | 'none' | ((piece: Piece) => string) }} [opts]
+   */
+  const cutList = ({ groupBy = 'identical' } = {}) => {
+    if (groupBy !== 'identical' && groupBy !== 'none' && typeof groupBy !== 'function') throw new TypeError(`groupBy inválido: ${String(groupBy)} (va 'identical', 'none' o una función)`);
+    const fix = model.allRelations().filter((r) => r.kind === 'fixing');
+    /** @type {Map<string, { stock: any, material: string, length: number, width: number, thickness: number, count: number, ids: string[], fixings: string[] }>} */
+    const filas = new Map();
+    const r9 = (/** @type {number} */ x) => Math.round(x * 1e9) / 1e9;
+    for (const p of model.allPieces()) {
+      const d = model.dims(p.id);
+      const stock = p.shape ? JSON.parse(JSON.stringify(p.shape)) : { kind: 'box' };
+      const extra = groupBy === 'none' ? p.id : typeof groupBy === 'function' ? String(groupBy(/** @type {Piece} */ (c.part(p.id)))) : '';
+      const clave = JSON.stringify([stock, p.material, r9(d.length), r9(d.width), r9(d.thickness), extra]);
+      let f = filas.get(clave);
+      if (!f) { f = { stock, material: p.material, length: d.length, width: d.width, thickness: d.thickness, count: 0, ids: [], fixings: [] }; filas.set(clave, f); }
+      f.count++;
+      f.ids.push(p.id);
+      for (const r of fix) if (r.parts.includes(p.id) && !f.fixings.includes(r.id)) f.fixings.push(r.id);
+    }
+    return congelado([...filas.values()]);
+  };
 
   const workshop = {
     model,
@@ -1018,6 +1613,136 @@ export function createWorkshop(init = {}) {
       return Object.freeze(guides(mueven.map((id) => obbOf(model, id)), lasOtras(mueven, against), { tolerance: tolerance ?? c.tolerances().touch })
         .map((g) => Object.freeze({ normal: new Vector3d(...g.normal), offset: g.offset, other: c.part(g.other), kind: g.kind, gap: g.gap })));
     },
+    /**
+     * Una junta entre dos partes: la móvil gira sobre `axis` (revolute) o corre a lo largo de él
+     * (prismatic) respecto de la base. `axis`: una Line en el mundo (para una corredera alcanza su
+     * dirección, o un vector). `limits`: { min, max } en grados o en unidades del documento; en una
+     * corredera, si no se dicen, de 0 al largo de la móvil en esa dirección.
+     * @param {{ type: 'revolute' | 'prismatic', moving: Part | string, base: Part | string, axis: Line | VectorLike, limits?: { min: number, max: number } | [number, number] | null, meta?: Record<string, any> }} spec
+     * @returns {Joint}
+     */
+    addJoint({ type, moving, base, axis, limits, meta }) {
+      if (!JOINT_TYPES.includes(type)) throw new TypeError(`tipo de junta inválido: ${String(type)} (van ${JOINT_TYPES.join(', ')})`);
+      const M = idDe(moving), B = idDe(base);
+      model.own(M); model.own(B);
+      if (M === B) throw new Error(`${M} no puede moverse respecto de sí misma`);
+      /** @type {[number, number, number]} */ let o, dir;
+      if (axis instanceof Line) { o = /** @type {[number, number, number]} */ (axis.from.toArray()); dir = /** @type {[number, number, number]} */ (axis.direction.toArray()); }
+      else if (type === 'prismatic') { o = [0, 0, 0]; dir = vec3(/** @type {VectorLike} */ (axis), 'dirección'); }
+      else throw new TypeError('una junta que gira necesita su eje: una Line en el mundo');
+      const L = Math.hypot(...dir);
+      if (!L) throw new Error('el eje de la junta no puede tener largo 0');
+      dir = /** @type {[number, number, number]} */ (dir.map((x) => x / L));
+      const inv = invert(model.worldFrame(B));
+      let lim = limitesDe(limits);
+      if (limits === undefined && type === 'prismatic') {
+        const pts = model.positions(M, 'world').map((q) => pt(q, dir));
+        lim = [0, Math.max(...pts) - Math.min(...pts)];
+      }
+      const id = model.addRelation({
+        kind: 'joint', parts: [M, B], meta: metaDe(meta),
+        data: { type, origin: apply(inv, o), direction: rotar(inv.r, dir), limits: lim },
+      });
+      return /** @type {Joint} */ (c.relation(id));
+    },
+    /**
+     * Los cantos donde puede ir una bisagra entre la móvil y la base, calculados en el marco de la
+     * base (andan igual con el mueble girado): los de la cara de la móvil que mira a la base, con el
+     * sentido que la abre hacia afuera; primero los más cerca de la base y los más largos. Cada uno
+     * va directo a addJoint: { type, moving, base, axis, limits }.
+     * @param {Part | string} moving @param {Part | string} base
+     */
+    hingeCandidates(moving, base) {
+      const M = idDe(moving), B = idDe(base), W = model.worldFrame(B), inv = invert(W);
+      return congelado(hingeCandidates(cajaEn(M, inv), cajaEn(B, inv)).map((h) => ({
+        type: /** @type {const} */ ('revolute'), moving: c.part(M), base: c.part(B), limits: null, distance: h.distance,
+        axis: new Line(apply(W, h.origin), apply(W, /** @type {[number, number, number]} */ (h.origin.map((x, k) => x + h.direction[k] * h.length)))),
+      })));
+    },
+    /**
+     * Las direcciones en que la móvil puede correr sin chocar con las piezas de la base (en el
+     * marco de la base): primero las que menos tiene que andar para salir. Cada una va directo a
+     * addJoint, con límites de 0 a su largo en esa dirección.
+     * @param {Part | string} moving @param {Part | string} base
+     */
+    slideCandidates(moving, base) {
+      const M = idDe(moving), B = idDe(base), W = model.worldFrame(B), inv = invert(W);
+      const fuera = new Set(model.piecesOf(M).map((p) => p.id));
+      const piezas = model.piecesOf(B).filter((p) => !fuera.has(p.id)).map((p) => cajaEn(p.id, inv));
+      const m = cajaEn(M, inv);
+      const centro = /** @type {[number, number, number]} */ ([0, 1, 2].map((k) => (m.min[k] + m.max[k]) / 2));
+      return congelado(slideCandidates(m, piezas.length ? piezas : [cajaEn(B, inv)], c.tolerances().touch).map((x) => ({
+        type: /** @type {const} */ ('prismatic'), moving: c.part(M), base: c.part(B), limits: { min: 0, max: x.travel }, gap: x.gap,
+        axis: new Line(apply(W, centro), apply(W, /** @type {[number, number, number]} */ (centro.map((v, k) => v + x.direction[k] * x.travel)))),
+      })));
+    },
+    /**
+     * Una unión entre dos piezas que se tocan cara con cara: `a` es por donde entra y `b`, donde
+     * agarra. Sus puntos van normalizados sobre el parche de contacto (`points`: [u, v] de 0 a 1),
+     * o se reparten solos (`count`, 1 si no se dice nada). `holes`: el agujero que hace en cada
+     * pieza ({ diameter, depth? }; sin depth, pasante), como operaciones de las piezas. `policy`:
+     * qué pasa si se separan ('break': queda rota, por defecto; 'remove': se borra).
+     * @param {{ a: Part | string, b: Part | string, points?: [number, number][], count?: number, holes?: { a?: { diameter: number, depth?: number } | null, b?: { diameter: number, depth?: number } | null }, policy?: 'break' | 'remove', meta?: Record<string, any> }} spec
+     * @returns {Fixing}
+     */
+    addFixing({ a, b, points, count, holes, policy, meta }) {
+      const A = idDe(a), B = idDe(b);
+      model.ownPiece(A); model.ownPiece(B);
+      if (A === B) throw new Error(`${A} no se puede unir consigo misma`);
+      const data = datosDeUnion({ points, count, holes, policy });
+      if (!ubicarUnion(c, /** @type {RelationDef} */ ({ id: '', kind: 'fixing', parts: [A, B], data, ops: [], broken: null, meta: null }))) {
+        throw new Error(`${A} y ${B} no se tocan cara con cara: una unión va en el contacto entre dos caras`);
+      }
+      return /** @type {Fixing} */ (c.relation(model.addRelation({ kind: 'fixing', parts: [A, B], data, meta: metaDe(meta) })));
+    },
+    /**
+     * Un vínculo: ancla la punta de `moving` que mira a la cara `face` de `base`, a `gap` de ella
+     * (hacia afuera; si no se dice, la de ahora). Con una punta anclada sobre un eje, la pieza se
+     * mueve con la base; con las dos, se estira entre las dos caras. Falla si sobre-restringe, si
+     * hace un ciclo o si no hay una punta paralela a la cara (ver validateLink).
+     * @param {{ base: Part | string, face: Face | { axis: AxisLike | 0 | 1 | 2, side: 1 | -1 }, moving: Part | string, gap?: number, meta?: Record<string, any> }} spec
+     * @returns {Link}
+     */
+    addLink({ base, face, moving, gap, meta }) {
+      const v = revisarVinculo({ base, face, moving });
+      if (!v.ok) throw new Error(v.message);
+      const A = idDe(base), B = idDe(moving);
+      if (gap !== undefined && (typeof gap !== 'number' || !Number.isFinite(gap))) throw new TypeError(`separación inválida: ${String(gap)}`);
+      const f = caraEnElMundo(A, v.face.axis, v.face.side);
+      const W = model.worldFrame(B), k = v.end.axis;
+      const x0 = W.t.map((x, i) => x + (W.r[3 * i + k] * v.end.side * model.piece(B).size[k]) / 2);
+      const g = gap ?? Math.round((pt(f.n, x0) - pt(f.n, f.p)) * 1e9) / 1e9;
+      const id = model.addRelation({ kind: 'link', parts: [A, B], meta: metaDe(meta), data: { face: [v.face.axis, v.face.side], end: [v.end.axis, v.end.side], gap: g } });
+      return /** @type {Link} */ (c.relation(id));
+    },
+    /**
+     * ¿Se puede crear este vínculo? { ok: true } o { ok: false, reason, message }; reason es
+     * 'over-constrained', 'cycle', 'not-parallel', 'self' o 'invalid'.
+     * @param {{ base: Part | string, face: unknown, moving: Part | string }} spec
+     */
+    validateLink(spec) {
+      const v = revisarVinculo(spec);
+      return Object.freeze(v.ok ? { ok: true } : { ok: false, reason: v.reason, message: v.message });
+    },
+    /** Una relación por su id (también una de adentro de una instancia). @param {string} id */
+    relation(id) { return c.relation(id); },
+    /**
+     * Las relaciones del documento (con las que se ven adentro de cada instancia). `kind`: solo de
+     * ese tipo. `part`: solo las de esa parte.
+     * @param {{ kind?: string, part?: Part | string }} [opts]
+     */
+    relations({ kind, part } = {}) {
+      const p = part === undefined ? null : idDe(part);
+      return Object.freeze(model.allRelations().filter((r) => (!kind || r.kind === kind) && (!p || r.parts.includes(p))).map((r) => c.relation(r.id)));
+    },
+    /**
+     * El despiece: { stock, material, length, width, thickness, count, ids, fixings } por cada
+     * grupo de piezas idénticas (con las de adentro de las instancias, que suman a la misma fila).
+     * Cada pieza va por su bruto (lo que se compra), no por la forma que le dejan sus operaciones.
+     * `groupBy`: 'identical' (por defecto), 'none' (una fila por pieza) o una función que, además,
+     * separa las filas por lo que devuelva.
+     */
+    cutList,
     /** @param {string} id */
     part(id) { return c.part(id); },
     get parts() { return Object.freeze([...model.parts.keys()].map((id) => c.part(id))); },
@@ -1061,8 +1786,8 @@ export function createWorkshop(init = {}) {
     clearHistory() { model.clearHistory(); },
     toJSON() { return model.toJSON(); },
     /** @param {any} data */
-    load(data) { cache.clear(); model.load(data); },
-    clear() { cache.clear(); model.load({ units: model.units, counters: {}, parts: [] }); },
+    load(data) { cache.clear(); relCache.clear(); firmasDeUniones.clear(); model.load(data); },
+    clear() { cache.clear(); relCache.clear(); firmasDeUniones.clear(); model.load({ units: model.units, counters: {}, parts: [] }); },
     /** @param {{ print?: boolean }} [opts] */
     help(opts) { return help('Workshop — el documento: crear, buscar y guardar partes', WORKSHOP_MEMBERS, opts); },
   };
@@ -1080,6 +1805,15 @@ export const WORKSHOP_MEMBERS = [
   ['pushOut(parts, { against?, floor?, up? })', 'si está metida en otras, { transform, from } que la saca por el lado de menor penetración'],
   ['drop(parts, { against?, floor?, up? })', 'apoyar: { transform, distance, on } hasta tocar lo de abajo o el piso'],
   ['alignmentGuides(parts, { against?, tolerance? })', 'los planos de otras piezas con los que quedó alineada, los más cercanos primero'],
+  ['addJoint({ type, moving, base, axis, limits?, meta? })', "una junta: la móvil gira sobre axis ('revolute') o corre a lo largo de él ('prismatic'); se abre con joint.at(value)"],
+  ['hingeCandidates(moving, base)', 'los cantos donde puede ir una bisagra, en el marco de la base; cada uno va directo a addJoint'],
+  ['slideCandidates(moving, base)', 'las direcciones en que la móvil corre sin chocar con la base; cada una va directo a addJoint'],
+  ['addFixing({ a, b, points?, count?, holes?, policy?, meta? })', 'una unión entre dos piezas que se tocan: puntos normalizados en el parche, agujeros en las dos'],
+  ['addLink({ base, face, moving, gap?, meta? })', 'un vínculo: la punta de moving anclada a una cara de base; una punta mueve, dos estiran'],
+  ['validateLink({ base, face, moving })', "¿se puede crear ese vínculo? { ok } o { ok: false, reason: 'over-constrained' | 'cycle' | 'not-parallel' | …, message }"],
+  ['relation(id)', 'una relación por su id (Joint, Fixing, Link)'],
+  ['relations({ kind?, part? })', 'las relaciones del documento, con las de adentro de las instancias'],
+  ['cutList({ groupBy? })', 'el despiece: { stock, material, length, width, thickness, count, ids, fixings } por grupo de piezas idénticas'],
   ['part(id)', 'una parte por su id'],
   ['parts', 'todas las partes'],
   ['roots', 'las partes de primer nivel (las que no están en un ensamble)'],
@@ -1088,7 +1822,7 @@ export const WORKSHOP_MEMBERS = [
   ['contacts({ tolerance?, exact? })', 'todos los contactos entre piezas (Contact); exact: con la forma real'],
   ['collisions({ tolerance?, exact? })', 'todas las piezas que se meten unas en otras (Intersection)'],
   ['tree()', 'el árbol de partes, como texto'],
-  ['on(fn)', "enterarse de cada cambio ({ type, ids }); deshacer avisa con 'undo' y 'redo', y cancelar con 'rollback'; devuelve cómo desuscribirse"],
+  ['on(fn)', "enterarse de cada cambio ({ type, ids }); deshacer avisa con 'undo' y 'redo', cancelar con 'rollback', y las relaciones con 'relation', 'relation-broken' y 'relation-remove'; devuelve cómo desuscribirse"],
   ['undo()', 'volver al documento de antes del último paso; false si no había nada'],
   ['redo()', 'volver a hacer lo último que se deshizo; false si no había nada'],
   ['canUndo', '¿hay algo para deshacer?'],

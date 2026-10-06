@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createWorkshop, Part, Piece, Assembly, Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, WORKSHOP_MEMBERS,
+  Relation, Joint, Fixing, Link, RELATION_KINDS, JOINT_TYPES,
   arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, tolerancesFor, Mesh, OPERATION_KINDS, SECTIONS,
 } from '../src/index.js';
 import * as sdk from '../src/index.js';
@@ -300,6 +301,10 @@ for (const [cls, members, campos] of [
   [Mesh, Mesh.members, ['positions', 'indices', 'surfaces', 'smooth']],
   [Piece, [...Piece.members, ...Part.members], ['id']],
   [Assembly, [...Assembly.members, ...Part.members], ['id']],
+  [Relation, Relation.members, ['id']],
+  [Joint, [...Joint.members, ...Relation.members], ['id']],
+  [Fixing, [...Fixing.members, ...Relation.members], ['id']],
+  [Link, [...Link.members, ...Relation.members], ['id']],
 ]) {
   test(`help() de ${cls.name} está completa y no inventa nada`, () => {
     const real = publicos(cls, { instanceFields: campos });
@@ -1069,7 +1074,7 @@ test('rollback() cancela el gesto entero, y transaction(fn) vuelve atrás si fn 
   assert.equal(doc(t), antes);
   assert.equal(t.transaction(() => 42), 42, 'devuelve lo que devuelve fn');
   t.undo();
-  assert.equal(doc(t), '{"version":4,"units":"cm","counters":{"piece":0,"assembly":0,"instance":0},"parts":[]}', 'ni el rollback ni la transacción vacía dejaron pasos');
+  assert.equal(doc(t), '{"version":5,"units":"cm","counters":{"piece":0,"assembly":0,"instance":0,"relation":0},"parts":[],"relations":[]}', 'ni el rollback ni la transacción vacía dejaron pasos');
 });
 
 test('una operación que falla a mitad de camino no deja nada hecho', () => {
@@ -1331,7 +1336,7 @@ test('las operaciones se guardan con el documento, la forma no; y deshacer las d
   const t = createWorkshop();
   const p = t.addPiece({ size: [60, 4, 5] }).addOperation({ kind: 'cut', axis: 2, outline: TRAPECIO });
   const json = JSON.stringify(t.toJSON());
-  assert.equal(JSON.parse(json).version, 4);
+  assert.equal(JSON.parse(json).version, 5);
   assert.ok(json.includes('"operations":[{"id":"O-1","kind":"cut"'));
   assert.ok(!json.includes('positions'), 'la forma que resulta no se guarda');
   const u = createWorkshop();
@@ -1932,11 +1937,415 @@ test('estirar una pieza con operaciones las reaplica (van normalizadas)', () => 
   cerca([p.local.solid.volume], [0.75 * 120 * 4 * 5], 1e-9);
 });
 
+// ---------- relaciones: lo común (#12) ----------
+// Una relación vive en el documento: se deshace, se guarda, se limpia si se borra una de sus
+// partes, y se copia (o se ve) con lo que se copia.
+
+/** Un mueble simple: dos laterales y un estante entre ellos, que los toca. */
+const mueble = (t) => {
+  const izq = t.addPiece({ name: 'Lateral izq', size: [2, 70, 50], center: [-31, 35, 0] });   // x de -32 a -30
+  const der = t.addPiece({ name: 'Lateral der', size: [2, 70, 50], center: [31, 35, 0] });    // x de 30 a 32
+  const est = t.addPiece({ name: 'Estante', size: [60, 2, 50], center: [0, 35, 0] });        // x de -30 a 30
+  return { izq, der, est };
+};
+const anclar = (t, { izq, der, est }, gap) => [
+  t.addLink({ base: izq, face: { axis: 'x', side: 1 }, moving: est, gap }),
+  t.addLink({ base: der, face: { axis: 'x', side: -1 }, moving: est, gap }),
+];
+const xDe = (p) => [p.boundingBox.min.x, p.boundingBox.max.x];
+
+test('una relación se guarda: toJSON → load → toJSON da lo mismo, y load revisa que sus partes existan', () => {
+  const t = createWorkshop();
+  const m = mueble(t);
+  anclar(t, m);
+  t.addFixing({ a: m.izq, b: m.est, count: 2, holes: { a: { diameter: 0.5 }, b: { diameter: 0.4, depth: 4 } }, meta: { tipo: 'cualquiera' } });
+  const json = JSON.stringify(t.toJSON());
+  assert.equal(JSON.parse(json).version, 5);
+  const u = createWorkshop();
+  u.load(JSON.parse(json));
+  assert.equal(JSON.stringify(u.toJSON()), json);
+  assert.equal(u.relations().length, 3);
+  assert.deepEqual(u.relation('R-3').meta, { tipo: 'cualquiera' }, 'lo de la app viaja con ella, y el SDK no lo lee');
+  const malo = JSON.parse(json);
+  malo.relations[0].parts = ['P-1', 'P-99'];
+  assert.throws(() => u.load(malo), /la relación R-1 apunta a P-99, que no existe/);
+  assert.equal(JSON.stringify(u.toJSON()), json, 'un documento malo no se carga a medias');
+});
+
+test('borrar una parte borra sus relaciones (y los agujeros que dejaron en la otra), en el mismo paso', () => {
+  const t = createWorkshop();
+  const m = mueble(t);
+  const [l1] = anclar(t, m);
+  const f = t.addFixing({ a: m.izq, b: m.est, count: 2, holes: { b: { diameter: 0.4, depth: 4 } } });
+  assert.equal(m.est.operations.length, 2, 'los agujeros de la unión son operaciones del estante');
+  const ev = [];
+  t.on((e) => ev.push(e));
+  m.izq.remove();
+  assert.deepEqual(t.relations().map((r) => r.id), ['R-2'], 'se fueron el vínculo y la unión del lateral; queda el del otro');
+  assert.equal(m.est.operations.length, 0, 'sin la unión, el estante no tiene sus agujeros');
+  assert.ok(ev.some((e) => e.type === 'relation-remove' && e.ids.includes(f.id)));
+  assert.throws(() => l1.gap, /no existe la relación R-1/);
+  t.undo();
+  assert.deepEqual(t.relations().map((r) => r.id), ['R-1', 'R-2', 'R-3'], 'deshacer devuelve la pieza y sus relaciones');
+  assert.equal(m.est.operations.length, 2);
+});
+
+test('duplicar copia las relaciones de adentro con ids nuevos; instanciar las muestra; soltar las hace propias', () => {
+  const t = createWorkshop();
+  const m = mueble(t);
+  anclar(t, m);
+  const e = t.assemble([m.izq, m.der, m.est]);
+  const copia = e.duplicate();
+  const nuevas = t.relations({ kind: 'link' }).filter((r) => r.parts.some((p) => copia.pieces.includes(p)));
+  assert.equal(nuevas.length, 2);
+  assert.ok(nuevas.every((r) => r.parts.every((p) => copia.pieces.includes(p))), 'las copias apuntan a las piezas nuevas');
+  const i = t.instantiate(e, { placement: Transform.translation([0, 0, 100]) });
+  const vistas = t.relations({ part: `${i.id}/P-3` });
+  assert.deepEqual(vistas.map((r) => r.id).sort(), [`${i.id}/R-1`, `${i.id}/R-2`]);
+  assert.ok(vistas.every((r) => r.isVirtual));
+  assert.throws(() => vistas[0].remove(), /se cambia en su fuente/);
+  assert.throws(() => t.addLink({ base: `${i.id}/P-1`, face: { axis: 'x', side: 1 }, moving: m.est }), /es parte de la instancia/);
+  i.detach();
+  const propias = t.relations({ kind: 'link' }).filter((r) => r.parts.every((p) => i.pieces.includes(p)));
+  assert.equal(propias.length, 2, 'la instancia suelta tiene sus propios vínculos');
+  assert.ok(propias.every((r) => !r.isVirtual));
+});
+
+test('las relaciones entran en el deshacer, y crear una avisa', () => {
+  const t = createWorkshop();
+  const m = mueble(t);
+  const ev = [];
+  t.on((e) => ev.push(e));
+  const l = t.addLink({ base: m.izq, face: { axis: 'x', side: 1 }, moving: m.est });
+  assert.ok(ev.some((e) => e.type === 'relation' && e.ids.includes(l.id)));
+  l.setGap(-1);
+  assert.equal(l.gap, -1);
+  t.undo();
+  assert.equal(t.relation(l.id).gap, 0);
+  t.undo();
+  assert.equal(t.relations().length, 0);
+  t.redo();
+  assert.equal(t.relations().length, 1);
+  assert.deepEqual(RELATION_KINDS, ['joint', 'fixing', 'link']);
+});
+
+// ---------- juntas (#13) ----------
+
+/** Un lateral y una puerta delante, que lo tapa: la puerta va de x -25 a 25, de z 25 a 27. */
+const puertaYLateral = (t) => {
+  const lat = t.addPiece({ name: 'Lateral', size: [2, 70, 50], center: [-24, 35, 0] });      // x de -25 a -23, z de -25 a 25
+  const puerta = t.addPiece({ name: 'Puerta', size: [50, 70, 2], center: [0, 35, 26] });
+  return { lat, puerta };
+};
+
+test('bisagra: el canto propuesto es el de al lado del lateral, y abierta a 90° la puerta queda perpendicular, sobre el canto', () => {
+  const t = createWorkshop();
+  const { lat, puerta } = puertaYLateral(t);
+  const [c0] = t.hingeCandidates(puerta, lat);
+  cerca([c0.axis.from.x, c0.axis.from.z, c0.axis.to.x, c0.axis.to.z], [-25, 25, -25, 25], 1e-9, 'el canto de atrás de la puerta, del lado del lateral');
+  assert.equal(c0.axis.length, 70, 'a lo largo del canto');
+  const j = t.addJoint(c0);
+  assert.equal(j.type, 'revolute');
+  const antes = JSON.stringify(t.toJSON());
+  const a0 = j.at(0);
+  assert.ok(a0.placements[puerta.id].frame.t.every((v, k) => Math.abs(v - puerta.placement.frame.t[k]) < 1e-9), 'cerrada es el modelo');
+  const a90 = j.at(90);
+  const caja = BoundingBox.fromPoints(puerta.local.vertices.map((v) => v.transform(a90.placements[puerta.id])));
+  cerca([caja.min.x, caja.max.x, caja.min.z, caja.max.z], [-27, -25, 25, 75], 1e-9, 'abierta: de canto, hacia afuera del mueble');
+  assert.ok(puerta.local.vertices.map((v) => v.transform(a90.placements[puerta.id])).some((v) => v.equals([-25, 0, 25])), 'su canto sigue sobre el de la bisagra');
+  assert.equal(JSON.stringify(t.toJSON()), antes, 'abrir no toca el documento');
+});
+
+test('bisagra: con el mueble girado, abrir da lo mismo respecto del mueble', () => {
+  const caja90 = (girar) => {
+    const t = createWorkshop();
+    const { lat, puerta } = puertaYLateral(t);
+    const e = t.assemble([lat, puerta]);
+    if (girar) e.rotate(90, 'y').rotate(30, 'x');
+    const j = t.addJoint(t.hingeCandidates(puerta, lat)[0]);
+    const enLat = lat.placement.inverse();
+    return BoundingBox.fromPoints(puerta.local.vertices.map((v) => v.transform(j.at(90).placements[puerta.id]).transform(enLat)));
+  };
+  const a = caja90(false), b = caja90(true);
+  cerca([...b.min.toArray(), ...b.max.toArray()], [...a.min.toArray(), ...a.max.toArray()], 1e-9);
+});
+
+test('corredera de cajón: la única salida es el frente, y at(value) se limita al largo', () => {
+  const t = createWorkshop();
+  const cuerpo = t.assemble([
+    t.addPiece({ size: [2, 30, 50], center: [-21, 15, 0] }), t.addPiece({ size: [2, 30, 50], center: [21, 15, 0] }),
+    t.addPiece({ size: [40, 2, 50], center: [0, 1, 0] }), t.addPiece({ size: [40, 2, 50], center: [0, 29, 0] }),
+    t.addPiece({ size: [40, 26, 2], center: [0, 15, -24] }),
+  ]);
+  const cajon = t.addPiece({ name: 'Cajón', size: [39, 20, 47], center: [0, 15, 1.5] });
+  const cs = t.slideCandidates(cajon, cuerpo);
+  assert.equal(cs.length, 1, 'atrás, arriba, abajo y a los costados choca');
+  assert.ok(cs[0].axis.direction.unitize().equals([0, 0, 1]));
+  const j = t.addJoint(cs[0]);
+  assert.deepEqual(j.limits, { min: 0, max: 47 });
+  const r = j.at(100);
+  assert.equal(r.value, 47);
+  assert.ok(r.limited);
+  cerca(r.placements[cajon.id].frame.t, [0, 15, 48.5], 1e-9);
+  assert.equal(t.addJoint({ type: 'prismatic', moving: cajon, base: cuerpo, axis: [0, 0, 1] }).limits.max, 47, 'sin límites, la corredera llega hasta el largo de la móvil');
+  assert.throws(() => t.addJoint({ type: 'helicoidal', moving: cajon, base: cuerpo, axis: [0, 0, 1] }), /tipo de junta inválido/);
+  assert.deepEqual(JOINT_TYPES, ['revolute', 'prismatic']);
+});
+
+// ---------- uniones (#14) ----------
+
+/** El centro de la boca de un agujero (una operación) en el mundo, y hacia dónde entra. */
+const bocaDe = (p, op) => {
+  const s = [p.size.x, p.size.y, p.size.z];
+  const q = [0, 0, 0];
+  q[op.axis] = (op.side * s[op.axis]) / 2;
+  const [u, v] = [0, 1, 2].filter((i) => i !== op.axis);
+  q[u] = op.at[0] * s[u] - s[u] / 2;
+  q[v] = op.at[1] * s[v] - s[v] / 2;
+  const n = [0, 0, 0];
+  n[op.axis] = -op.side;
+  return { boca: new Point3d(...q).transform(p.placement), hacia: new Vector3d(...n).transform(p.placement) };
+};
+const aLaRecta = (punto, { boca, hacia }) => punto.subtract(boca).cross(hacia).length;
+
+test('unión entre lateral y estante: 2 puntos en 1/3 y 2/3, que siguen ahí al estirar', () => {
+  const t = createWorkshop();
+  const { izq, der, est } = mueble(t);
+  const f = t.addFixing({ a: izq, b: est, count: 2 });
+  assert.deepEqual(f.points.map((p) => p.uv), [[0.5, 1 / 3], [0.5, 2 / 3]], 'a lo largo del lado largo del parche (u, v: y, z del lateral)');
+  cerca(f.points.map((p) => p.point.z), [-25 + 50 / 3, -25 + 100 / 3], 1e-9);
+  assert.ok(f.direction.equals([1, 0, 0]), 'entra por el lateral, hacia el estante');
+  assert.deepEqual(f.points[0].thickness, { a: 2, b: 60 }, 'atraviesa el lateral y agarra a lo largo del estante');
+  const e = t.assemble([izq, der, est]);
+  e.stretch({ axis: 'z', plane: 0, delta: 15 });
+  assert.equal(est.size.z, 65);
+  assert.deepEqual(f.points.map((p) => p.uv), [[0.5, 1 / 3], [0.5, 2 / 3]]);
+  cerca(f.points.map((p) => p.point.z), [-25 + 65 / 3, -25 + 130 / 3], 1e-9, 'en 1/3 y 2/3 del parche estirado');
+});
+
+test('los agujeros de una unión caen en las dos piezas en el mismo punto del mundo, también con el mueble girado', () => {
+  const t = createWorkshop();
+  const { izq, der, est } = mueble(t);
+  const f = t.addFixing({ a: izq, b: est, count: 2, holes: { a: { diameter: 0.5 }, b: { diameter: 0.4, depth: 4 } } });
+  const revisar = (msg) => {
+    const [ha, hb] = [izq.operations, est.operations];
+    assert.equal(ha.length, 2, msg);
+    assert.equal(hb.length, 2, msg);
+    assert.ok(ha.every((o) => o.kind === 'hole' && o.diameter === 0.5 && o.depth === undefined), 'en el lateral, pasante');
+    assert.ok(hb.every((o) => o.depth === 4), 'en el estante, con su profundidad');
+    f.points.forEach((p, i) => {
+      assert.ok(aLaRecta(p.point, bocaDe(izq, ha[i])) < 1e-9, `${msg}: el agujero ${i} del lateral pasa por el punto`);
+      assert.ok(aLaRecta(p.point, bocaDe(est, hb[i])) < 1e-9, `${msg}: el agujero ${i} del estante pasa por el punto`);
+      assert.ok(bocaDe(est, hb[i]).boca.equals(p.point), `${msg}: el del estante empieza en el contacto`);
+    });
+  };
+  revisar('derecho');
+  const e = t.assemble([izq, der, est]);
+  e.rotate(37, 'z').rotate(90, 'y');
+  revisar('girado');
+  assert.deepEqual(f.points.map((p) => p.uv), [[0.5, 1 / 3], [0.5, 2 / 3]]);
+  f.update({ points: [[0.5, 0.5]] }); // un punto: un agujero por pieza
+  assert.equal(izq.operations.length, 1);
+  assert.equal(est.operations.length, 1);
+  assert.ok(aLaRecta(f.points[0].point, bocaDe(izq, izq.operations[0])) < 1e-9);
+});
+
+test('si las piezas se separan, la unión queda rota (y avisa); con policy remove se borra, con sus agujeros', () => {
+  const t = createWorkshop();
+  const { izq, est } = mueble(t);
+  const f = t.addFixing({ a: izq, b: est, holes: { b: { diameter: 0.4, depth: 4 } } });
+  const ev = [];
+  t.on((e) => ev.push(e));
+  izq.move([-5, 0, 0]);
+  assert.match(f.broken, /ya no se tocan/);
+  assert.ok(ev.some((e) => e.type === 'relation-broken' && e.ids.includes(f.id)));
+  assert.equal(f.direction, null);
+  izq.move([5, 0, 0]);
+  assert.equal(f.broken, null, 'se vuelven a tocar: vale otra vez');
+  f.update({ policy: 'remove' });
+  ev.length = 0;
+  izq.move([-5, 0, 0]);
+  assert.equal(t.relations().length, 0);
+  assert.equal(est.operations.length, 0, 'sin la unión no quedan sus agujeros');
+  assert.ok(ev.some((e) => e.type === 'relation-remove' && e.ids.includes(f.id)));
+  t.undo();
+  assert.equal(t.relations().length, 1, 'deshacer la devuelve');
+  assert.throws(() => t.addFixing({ a: izq, b: t.addPiece({ size: [1, 1, 1], center: [100, 0, 0] }) }), /no se tocan cara con cara/);
+});
+
+test('dentro de una transacción la unión no se rompe por un estado a medio hacer', () => {
+  const t = createWorkshop();
+  const { izq, est } = mueble(t);
+  const f = t.addFixing({ a: izq, b: est, policy: 'remove' });
+  t.transaction(() => {
+    izq.move([-5, 0, 0]);
+    izq.move([5, 0, 0]);
+  });
+  assert.equal(t.relations().length, 1);
+  assert.equal(f.broken, null);
+});
+
+// ---------- vínculos (#15) ----------
+
+test('estante entre dos laterales: mover un lateral 10 estira el estante 10, y deshacer devuelve los dos', () => {
+  const t = createWorkshop();
+  const m = mueble(t);
+  anclar(t, m);
+  m.der.move([10, 0, 0]);
+  assert.equal(m.est.size.x, 70);
+  cerca(xDe(m.est), [-30, 40], 1e-9);
+  m.izq.move([-4, 0, 0]);
+  cerca(xDe(m.est), [-34, 40], 1e-9);
+  t.undo();
+  cerca(xDe(m.est), [-30, 40], 1e-9, 'un paso deshace el lateral y el estante');
+  t.undo();
+  assert.equal(m.est.size.x, 60);
+  cerca(xDe(m.est), [-30, 30], 1e-9);
+});
+
+test('una sola punta anclada: la pieza se mueve con la base y conserva su largo; gap negativo la mete', () => {
+  const t = createWorkshop();
+  const m = mueble(t);
+  const l = t.addLink({ base: m.izq, face: { axis: 'x', side: 1 }, moving: m.est });
+  m.izq.move([-3, 0, 0]);
+  assert.equal(m.est.size.x, 60);
+  cerca(xDe(m.est), [-33, 27], 1e-9);
+  l.setGap(-1);
+  cerca(xDe(m.est), [-34, 26], 1e-9, 'con gap -1 el estante entra 1 en el lateral');
+  const u = createWorkshop();
+  const m2 = mueble(u);
+  anclar(u, m2, -1);
+  assert.equal(m2.est.size.x, 62, 'anclado a los dos con gap -1: entra 1 en cada uno');
+  cerca(xDe(m2.est), [-31, 31], 1e-9);
+});
+
+test('con el mueble girado, mover un lateral da lo mismo respecto del mueble', () => {
+  const t = createWorkshop();
+  const m = mueble(t);
+  const e = t.assemble([m.izq, m.der, m.est]);
+  e.rotate(90, 'y').rotate(25, 'x');
+  anclar(t, m);
+  m.der.move(m.der.axes.x.multiply(10));
+  assert.ok(Math.abs(m.est.size.x - 70) < 1e-9);
+  const enLat = m.izq.placement.inverse();
+  const b = BoundingBox.fromPoints(m.est.vertices.map((v) => v.transform(enLat)));
+  cerca([b.min.x, b.max.x], [1, 71], 1e-9, 'en el marco del lateral, el estante sigue al ras de los dos');
+});
+
+test('un ciclo, una punta de más o caras no paralelas se rechazan sin cambiar nada', () => {
+  const t = createWorkshop();
+  const m = mueble(t);
+  anclar(t, m);
+  const antes = JSON.stringify(t.toJSON());
+  const ciclo = { base: m.est, face: { axis: 'x', side: -1 }, moving: m.izq };
+  assert.deepEqual({ ...t.validateLink(ciclo) }.reason, 'cycle');
+  assert.throws(() => t.addLink(ciclo), /sería un ciclo: P-1 → P-3 → P-1/);
+  const otro = t.addPiece({ size: [2, 70, 50], center: [-40, 35, 0] });
+  assert.equal(t.validateLink({ base: otro, face: { axis: 'x', side: 1 }, moving: m.est }).reason, 'over-constrained');
+  assert.match(t.validateLink({ base: otro, face: { axis: 'x', side: 1 }, moving: m.est }).message, /ya está anclada por R-1/);
+  const girada = t.addPiece({ size: [2, 70, 50], center: [-60, 35, 0] }).rotate(30, 'y');
+  assert.equal(t.validateLink({ base: girada, face: { axis: 'x', side: 1 }, moving: otro }).reason, 'not-parallel');
+  assert.equal(t.validateLink({ base: m.est, face: { axis: 'x', side: 1 }, moving: m.est }).reason, 'self');
+  assert.deepEqual({ ...t.validateLink({ base: m.izq, face: { axis: 'y', side: 1 }, moving: otro }) }, { ok: true });
+  assert.equal(t.relations().length, 2, 'lo rechazado no se creó');
+  assert.match(antes, /"relations":\[\{"id":"R-1"/);
+});
+
+test('achicar por debajo del mínimo no se hace: la operación falla entera', () => {
+  const t = createWorkshop();
+  const m = mueble(t);
+  anclar(t, m);
+  const antes = JSON.stringify(t.toJSON());
+  assert.throws(() => m.der.move([-60, 0, 0]), /menos que el mínimo/);
+  assert.equal(JSON.stringify(t.toJSON()), antes);
+});
+
+test('en cascada: lo que depende de la pieza anclada la sigue, en el orden que haga falta', () => {
+  const t = createWorkshop();
+  const base = t.addPiece({ size: [2, 70, 50], center: [-31, 35, 0] });          // x de -32 a -30
+  const s1 = t.addPiece({ size: [10, 2, 50], center: [-25, 35, 0] });           // x de -30 a -20
+  const s2 = t.addPiece({ size: [10, 2, 50], center: [-15, 35, 0] });           // x de -20 a -10
+  const s3 = t.addPiece({ size: [10, 2, 50], center: [-5, 35, 0] });            // x de -10 a 0
+  t.addLink({ base: s2, face: { axis: 'x', side: 1 }, moving: s3 });            // creados al revés de como dependen
+  t.addLink({ base: s1, face: { axis: 'x', side: 1 }, moving: s2 });
+  t.addLink({ base, face: { axis: 'x', side: 1 }, moving: s1 });
+  base.move([-3, 0, 0]);
+  cerca([...xDe(s1), ...xDe(s2), ...xDe(s3)], [-33, -23, -23, -13, -13, -3], 1e-9, 's1 sigue a la base, s2 a s1 y s3 a s2');
+  t.undo();
+  cerca(xDe(s2), [-20, -10], 1e-9);
+});
+
+test('con una matriz, la fuente manda y las copias siguen', () => {
+  const t = createWorkshop();
+  const m = mueble(t);
+  anclar(t, m);
+  const e = t.assemble([m.izq, m.der, m.est]);
+  const [i] = t.array(e, { type: 'linear', count: 2, direction: [0, 0, 1], distance: 100 });
+  m.der.move([10, 0, 0]);
+  assert.equal(t.part(`${i.id}/${m.est.id}`).size.x, 70);
+  assert.equal(t.relations({ kind: 'link' }).length, 4, 'los de la fuente, y los mismos vistos en la copia');
+});
+
+test('duplicar un ensamble con vínculos: la copia se mueve sola, sin tocar a la original', () => {
+  const t = createWorkshop();
+  const m = mueble(t);
+  anclar(t, m);
+  const e = t.assemble([m.izq, m.der, m.est]);
+  const copia = e.duplicate();
+  const [, derCopia, estCopia] = copia.pieces;
+  derCopia.move([10, 0, 0]);
+  assert.equal(estCopia.size.x, 70);
+  assert.equal(m.est.size.x, 60);
+});
+
+// ---------- despiece (#16) ----------
+
+/** Un bastidor: dos montantes y dos travesaños. */
+const bastidor = (t, z = 0) => t.assemble([
+  t.addPiece({ name: 'Montante', size: [4, 100, 2], center: [-23, 50, z], material: 'pino' }),
+  t.addPiece({ name: 'Montante', size: [4, 100, 2], center: [23, 50, z], material: 'pino' }),
+  t.addPiece({ name: 'Travesaño', size: [42, 4, 2], center: [0, 2, z], material: 'pino' }),
+  t.addPiece({ name: 'Travesaño', size: [42, 4, 2], center: [0, 98, z], material: 'pino' }),
+]);
+
+test('despiece de los dos bastidores: la copia suma cantidades a las mismas filas', () => {
+  const t = createWorkshop();
+  const b = bastidor(t);
+  const solo = t.cutList();
+  assert.deepEqual(solo.map((r) => [r.length, r.width, r.thickness, r.count]), [[100, 4, 2, 2], [42, 4, 2, 2]]);
+  t.array(b, { type: 'linear', count: 2, direction: [1, 0, 0], distance: 60 });
+  const filas = t.cutList();
+  assert.deepEqual(filas.map((r) => [r.material, r.length, r.width, r.thickness, r.count]), [['pino', 100, 4, 2, 4], ['pino', 42, 4, 2, 4]]);
+  assert.deepEqual(filas[0].stock, { kind: 'box' });
+  assert.ok(filas[0].ids.includes('I-1/P-1'), 'las piezas de la copia van con su id de camino');
+  assert.equal(t.cutList({ groupBy: 'none' }).length, 8);
+  assert.equal(t.cutList({ groupBy: (p) => p.name }).length, 2);
+});
+
+test('el despiece respeta los ejes forzados y reporta el bruto, no la forma recortada', () => {
+  const t = createWorkshop();
+  t.addPiece({ size: [10, 60, 2], axes: { length: 0, width: 1, thickness: 2 }, material: 'mdf' });
+  const p = t.addPiece({ size: [60, 4, 5], center: [0, 20, 0] }).addOperation({ kind: 'cut', axis: 2, outline: TRAPECIO });
+  const otra = t.addPiece({ size: [10, 10, 10], center: [30, 20, 0] });
+  p.addOperation({ kind: 'trim', against: otra.id });
+  const [forzada, recortada] = t.cutList();
+  assert.deepEqual([forzada.length, forzada.width, forzada.thickness], [10, 60, 2], 'los ejes pedidos, no los por tamaño');
+  assert.deepEqual([recortada.length, recortada.width, recortada.thickness, recortada.count], [60, 5, 4, 1], 'lo que se compra');
+});
+
+test('el despiece dice qué uniones tiene cada fila, para los herrajes', () => {
+  const t = createWorkshop();
+  const m = mueble(t);
+  const f = t.addFixing({ a: m.izq, b: m.est, count: 2 });
+  const filas = t.cutList();
+  assert.deepEqual(filas.find((r) => r.ids.includes(m.est.id)).fixings, [f.id]);
+});
+
 // ---------- que el SDK siga siendo puro ----------
 
 test('el SDK no depende de ningún paquete externo ni del navegador (lo puede usar el servidor)', async () => {
   const { readFile } = await import('node:fs/promises');
-  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/units.js', 'src/config.js', 'src/solid.js', 'src/polygon.js', 'src/convex.js', 'src/sections.js', 'src/features.js', 'src/grab.js', 'src/placement.js', 'src/stretch.js', 'src/index.js', 'examples/demo.js']) {
+  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/units.js', 'src/config.js', 'src/solid.js', 'src/polygon.js', 'src/convex.js', 'src/sections.js', 'src/features.js', 'src/grab.js', 'src/placement.js', 'src/stretch.js', 'src/relations.js', 'src/index.js', 'examples/demo.js']) {
     const src = await readFile(new URL(`../${f}`, import.meta.url), 'utf8');
     const sin = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
     const ext = [...sin.matchAll(/^\s*(?:import|export)[^'"]*?from\s*['"]([^'"]+)['"]/gm)]

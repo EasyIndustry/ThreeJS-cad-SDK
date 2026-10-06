@@ -441,6 +441,75 @@ cuenta a la original: con `count: 4` se crean tres instancias.
 - Las matrices **crean** instancias y listo: no queda un objeto "matriz" que se re-evalúe. Si la
   cantidad depende de otra cosa (un volumen que se estira), quien llama vuelve a calcularla.
 
+## Relaciones: juntas, uniones y vínculos
+
+Una relación vive en el documento, entre partes guardadas: entra en el deshacer, se guarda con
+`toJSON()`, se limpia sola si se borra una de sus partes (en el mismo paso) y se copia con lo que
+se copia (`duplicate`, `detach`). Las de adentro de la fuente de una instancia se ven en la
+instancia con ids de camino (`I-1/R-2`): se leen como cualquier otra, y se cambian en la fuente.
+Cada una tiene `kind`, `parts`, `broken` (null si vale; si no, por qué) y `meta` (lo que la app
+quiera guardar con ella: su tipo comercial, un nombre; el SDK no lo lee). Avisan por `on` con
+`'relation'`, `'relation-broken'` y `'relation-remove'`.
+
+```js
+// una bisagra: el canto lo propone el SDK, en el marco de la base (anda con el mueble girado)
+const bisagra = taller.addJoint(taller.hingeCandidates(puerta, lateral)[0]);
+bisagra.at(90).placements;      // { [id de pieza]: Transform } con la puerta abierta: no cambia nada
+
+// una corredera: la dirección en que el cajón sale sin chocar, limitada a su largo
+const corredera = taller.addJoint(taller.slideCandidates(cajon, cuerpo)[0]);
+
+// una unión: 2 puntos repartidos en el contacto, con un agujero en cada pieza
+const union = taller.addFixing({ a: lateral, b: estante, count: 2,
+  holes: { a: { diameter: 0.5 }, b: { diameter: 0.4, depth: 4 } }, meta: { tipo: 'tornillo 4x40' } });
+
+// un estante entre dos laterales: mover un lateral lo estira
+taller.addLink({ base: izq, face: { axis: 'x', side: 1 }, moving: estante });
+taller.addLink({ base: der, face: { axis: 'x', side: -1 }, moving: estante });
+```
+
+- **Juntas** (`addJoint({ type: 'revolute' | 'prismatic', moving, base, axis, limits? })`). El eje
+  vive en el marco de la base. El documento guarda la junta cerrada; `joint.at(value)` (grados o
+  unidades del documento, limitado a `limits`) da dónde queda cada pieza de la parte móvil, sin
+  tocar el modelo: es para animar. Una corredera sin límites va de 0 al largo de la móvil.
+  `hingeCandidates` propone los cantos de la cara de la móvil que mira a la base, con el sentido
+  que la abre hacia afuera (primero los más cerca de la base, y los más largos); `slideCandidates`,
+  las direcciones en que corre sin barrer ninguna pieza de la base.
+- **Uniones** (`addFixing({ a, b, points? | count?, holes?, policy? })`). `a` es por donde entra y
+  `b`, donde agarra. Van en el contacto de cara entre las dos: sus puntos son `[u, v]` de 0 a 1
+  sobre el parche de contacto (o se reparten solos con `count`), así siguen en su lugar al estirar
+  o girar. `fixing.points` da cada punto en el mundo con lo que atraviesa de cada pieza en la
+  dirección de entrada (`pieza.thicknessAt(punto, dirección)`: la pared, si es un caño). Los
+  agujeros son operaciones `hole` de las dos piezas (sin `depth`, pasante) y se mueven con la unión.
+  Si las piezas se separan, la unión queda rota (`policy: 'break'`) o se borra con sus agujeros
+  (`'remove'`). Eso se mira al cerrar el paso: adentro de una transacción, un estado a medio hacer
+  no la rompe.
+- **Vínculos** (`addLink({ base, face, moving, gap? })`). No es un solver: ancla la punta de
+  `moving` que mira a la cara `face` de `base`, a `gap` de ella (hacia afuera de la base; 0 al ras;
+  negativo, se mete; si no se dice, la de ahora). Con una punta anclada sobre un eje, la pieza se
+  mueve con la base; con las dos, se estira entre las dos caras. Se resuelve después de cada
+  operación, en cascada (la base antes que lo que la sigue) y en el mismo paso de deshacer. Se
+  mide con la normal de la cara, así que anda igual con el mueble girado. `validateLink(spec)`
+  dice si se puede crear: `'over-constrained'` (una punta ya anclada, o tres), `'cycle'`,
+  `'not-parallel'`. Con una matriz, la fuente manda y las copias siguen. Si dejaría una pieza por
+  debajo de `tolerances.minLength`, la operación que lo causó falla entera.
+- Quedan en la app: el catálogo de bisagras, correderas y herrajes, sus medidas comerciales,
+  cuántos poner y los nombres.
+
+## Despiece
+
+```js
+taller.cutList();   // [{ stock, material, length, width, thickness, count, ids, fixings }, …]
+```
+
+Una fila por cada grupo de piezas idénticas: mismo bruto (`stock`: `{ kind: 'box' }` o la forma
+del perfil o del torneado), mismo material y mismo largo × ancho × espesor (los de `dims`: los
+ejes de la pieza, también los forzados con `axes`). Las piezas de adentro de las instancias suman
+a la misma fila. Una pieza con operaciones va por su bruto, que es lo que se compra. `fixings` son
+las uniones de las piezas de la fila, para los herrajes. `groupBy: 'none'` da una fila por pieza, y
+una función separa las filas por lo que devuelva. Corre en Node. Precios, desperdicio, cantos y
+mano de obra son de la app.
+
 ## Deshacer y rehacer
 
 El historial vive en el documento, porque es el documento el que sabe qué cambió.
@@ -492,7 +561,7 @@ e.duplicate().move([0, 0, 80]);
 Las medidas son números en la unidad del documento (ver [Unidades y tolerancias](#unidades-y-tolerancias)); los ángulos, en grados. Lo completo de cada clase está en su `help()`, que es la
 fuente de verdad (y está verificada): `taller.help()`, `Piece.help()`, `Assembly.help()`,
 `Point3d.help()`, `Vector3d.help()`, `Line.help()`, `BoundingBox.help()`, `Face.help()`,
-`Transform.help()`.
+`Transform.help()`, `Joint.help()`, `Fixing.help()`, `Link.help()`.
 
 ### Contacto e intersección
 
@@ -549,8 +618,9 @@ Dicho para que nadie lo dé por hecho:
 - **El contacto, por defecto, es el de la caja de cada pieza** (rápido, y exacto para una tabla).
   El de la forma real se pide con `{ exact: true }`. Un contacto de cara entre dos piezas partidas
   en convexos puede salir en varios pedazos (uno por pedazo que apoya).
-- **No hay fijaciones, juntas de movimiento ni vínculos.** Son relaciones
-  entre partes, y cada una va a entrar siguiendo la regla de arriba.
+- **Una unión va en un contacto de cara** entre caras planas alineadas a los ejes de cada pieza
+  (los agujeros son operaciones, que entran por una de esas caras). Un vínculo ancla piezas
+  (no ensambles) por sus puntas.
 
 ## Licencia
 

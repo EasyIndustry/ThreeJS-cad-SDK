@@ -87,7 +87,26 @@ import { checkShape } from './sections.js';
 /** Lo que se ve de una parte: una pieza o un ensamble (una instancia se ve como lo que copia). @typedef {PieceDef | AssemblyDef} PartDef */
 /** Lo que se guarda. @typedef {PieceDef | AssemblyDef | InstanceDef} StoredPart */
 
-/** Una foto del documento, para deshacer: sus partes y sus contadores de ids. @typedef {{ parts: Map<string, StoredPart>, counters: Record<string, number> }} Foto */
+/**
+ * Una RELACIÓN entre partes guardadas (una junta, una unión, un vínculo…). El modelo no sabe qué
+ * significa cada tipo: guarda sus partes, sus datos y su estado, la mete en el deshacer, la
+ * guarda con el documento y la limpia si alguna de sus partes desaparece. Lo que hace cada tipo
+ * lo pone el taller (index.js).
+ *   `ops`: las operaciones de piezas que son de la relación (los agujeros de una unión): se
+ *          borran con ella.
+ *   `broken`: null si vale, o por qué no.
+ *   `meta`: lo que la app quiera guardar con ella (su tipo comercial, un nombre); el SDK no lo lee.
+ * @typedef {Object} RelationDef
+ * @property {string} id
+ * @property {string} kind
+ * @property {string[]} parts
+ * @property {Record<string, any>} data
+ * @property {[string, string][]} ops     pares [pieza, id de operación]
+ * @property {string | null} broken
+ * @property {Record<string, any> | null} meta
+ */
+
+/** Una foto del documento, para deshacer: sus partes, sus relaciones y sus contadores de ids. @typedef {{ parts: Map<string, StoredPart>, relations: Map<string, RelationDef>, counters: Record<string, number> }} Foto */
 
 /** @typedef {{ min: Vec3, max: Vec3, size: Vec3, center: Vec3 }} Box */
 /** @typedef {{ axis: 0 | 1 | 2, side: 1 | -1, normal: Vec3, corners: Vec3[], center: Vec3 }} Face */
@@ -112,11 +131,11 @@ function deepFreeze(o) {
 /**
  * La versión del formato de `toJSON()`. Sube cuando un documento guardado trae algo que una
  * versión anterior del SDK perdería sin darse cuenta; `load` rechaza las que son más nuevas.
- *   1: partes y ensambles · 2: instancias · 3: unidad · 4: operaciones de las piezas
+ *   1: partes y ensambles · 2: instancias · 3: unidad · 4: operaciones de las piezas · 5: relaciones
  */
-const VERSION_DOCUMENTO = 4;
+const VERSION_DOCUMENTO = 5;
 
-const PREFIJO = /** @type {const} */ ({ piece: 'P', assembly: 'E', instance: 'I' });
+const PREFIJO = /** @type {const} */ ({ piece: 'P', assembly: 'E', instance: 'I', relation: 'R' });
 
 /** @param {Axes} axes @returns {Axes} */
 function checkAxes(axes) {
@@ -153,12 +172,30 @@ function validate(parts) {
   for (const id of parts.keys()) visitar(id, []);
 }
 
+/**
+ * Una relación que se carga tiene que apuntar a partes que existan.
+ * @param {Map<string, RelationDef>} relations @param {Map<string, StoredPart>} parts
+ */
+function validateRelations(relations, parts) {
+  for (const r of relations.values()) {
+    if (typeof r.id !== 'string' || typeof r.kind !== 'string' || !Array.isArray(r.parts)) throw new Error(`documento inválido: relación mal formada (${JSON.stringify(r).slice(0, 80)})`);
+    const falta = r.parts.find((p) => !parts.has(p));
+    if (falta) throw new Error(`documento inválido: la relación ${r.id} apunta a ${falta}, que no existe`);
+  }
+}
+
+/** Una relación limpia, con todos sus campos. @param {any} r @returns {RelationDef} */
+const relacion = (r) => ({ id: r.id, kind: r.kind, parts: [...r.parts], data: clone(r.data ?? {}), ops: clone(r.ops ?? []), broken: r.broken ?? null, meta: r.meta === undefined || r.meta === null ? null : clone(r.meta) });
+
 export class Model {
   /** @type {Foto[]} */
   #pasos = [];
   /** @type {Foto[]} */
   #rehacer = [];
   #nivel = 0;
+  /** Cuántas transacciones abrió el que usa el modelo (begin): las operaciones de adentro son "de primer nivel" para asentar. */
+  #abiertas = 0;
+  #asentando = false;
   /** @type {Foto | null} */
   #inicio = null;
 
@@ -175,10 +212,20 @@ export class Model {
     this.units = checkUnit(units);
     /** @type {Map<string, StoredPart>} */
     this.parts = new Map();
+    /** @type {Map<string, RelationDef>} */
+    this.relations = new Map();
     /** @type {Record<string, number>} */
-    this.counters = { piece: 0, assembly: 0, instance: 0 };
+    this.counters = { piece: 0, assembly: 0, instance: 0, relation: 0 };
     /** @type {Set<(ev: { type: string, ids: string[] }) => void>} */
     this.listeners = new Set();
+    /**
+     * Lo que pone en orden las relaciones después de cada cambio (lo cuelga el taller). Corre
+     * dentro del mismo paso de deshacer: con 'step' después de cada operación de primer nivel
+     * (también adentro de una transacción), y con 'close' al cerrar el paso (lo que no puede
+     * mirar un estado a medio hacer, como si dos piezas se siguen tocando).
+     * @type {((phase: 'step' | 'close') => void) | null}
+     */
+    this.settler = null;
   }
 
   // ---------- eventos: el visor (y mañana la interfaz) se cuelga de acá ----------
@@ -519,16 +566,17 @@ export class Model {
 
   /** @returns {Foto} */
   #foto() {
-    return { parts: new Map(this.parts), counters: { ...this.counters } };
+    return { parts: new Map(this.parts), relations: new Map(this.relations), counters: { ...this.counters } };
   }
 
   /** @param {Foto} f */
   #volver(f) {
     this.parts = new Map(f.parts);
+    this.relations = new Map(f.relations);
     this.counters = { ...f.counters };
   }
 
-  /** Los ids que cambian entre dos documentos: los que están en uno y no en el otro, o distintos. @param {Map<string, StoredPart>} a @param {Map<string, StoredPart>} b */
+  /** Los ids que cambian entre dos mapas: los que están en uno y no en el otro, o distintos. @param {Map<string, unknown>} a @param {Map<string, unknown>} b */
   #diferencias(a, b) {
     /** @type {string[]} */
     const out = [];
@@ -537,17 +585,33 @@ export class Model {
     return out;
   }
 
+  /** Lo que cambia entre el documento y una foto: partes y relaciones. @param {Foto} f */
+  #cambiosDesde(f) {
+    return [...this.#diferencias(this.parts, f.parts), ...this.#diferencias(this.relations, f.relations)];
+  }
+
   /** ¿El documento es el de la foto? @param {Foto} f */
   #igual(f) {
     const ks = new Set([...Object.keys(f.counters), ...Object.keys(this.counters)]);
-    return this.#diferencias(this.parts, f.parts).length === 0 && [...ks].every((k) => (f.counters[k] ?? 0) === (this.counters[k] ?? 0));
+    return this.#cambiosDesde(f).length === 0 && [...ks].every((k) => (f.counters[k] ?? 0) === (this.counters[k] ?? 0));
   }
 
   /** Vuelve a una foto y avisa qué cambió. @param {Foto} f @param {string} tipo */
   #restaurar(f, tipo) {
-    const ids = this.#diferencias(this.parts, f.parts);
+    const ids = this.#cambiosDesde(f);
     this.#volver(f);
     if (ids.length) this.emit(tipo, ids);
+  }
+
+  /**
+   * Deja que el taller ponga en orden las relaciones (ver `settler`). No se anida: lo que hace
+   * el que asienta no vuelve a asentar.
+   * @param {'step' | 'close'} phase
+   */
+  #asentar(phase) {
+    if (!this.settler || this.#asentando || !this.relations.size) return;
+    this.#asentando = true;
+    try { this.settler(phase); } finally { this.#asentando = false; }
   }
 
   /** Cierra el paso que se abrió: si cambió algo, queda para deshacer. */
@@ -570,9 +634,15 @@ export class Model {
     if (this.#nivel === 0) this.#inicio = antes;
     this.#nivel++;
     try {
-      return fn();
+      const r = fn();
+      // una operación de primer nivel (la que pidió el que usa el modelo, no una de adentro de otra)
+      if (this.#nivel === this.#abiertas + 1 && !this.#asentando) {
+        this.#asentar('step');
+        if (this.#nivel === 1) this.#asentar('close');
+      }
+      return r;
     } catch (e) {
-      const ids = this.#diferencias(this.parts, antes.parts);
+      const ids = this.#cambiosDesde(antes);
       this.#volver(antes);
       if (ids.length) this.emit('rollback', ids);
       throw e;
@@ -585,11 +655,21 @@ export class Model {
   begin() {
     if (this.#nivel === 0) this.#inicio = this.#foto();
     this.#nivel++;
+    this.#abiertas++;
   }
 
   /** Cierra la transacción. Si no cambió nada, no queda ningún paso. */
   commit() {
     if (this.#nivel === 0) throw new Error('no hay una transacción abierta (begin)');
+    if (this.#nivel === 1) {
+      try {
+        this.#asentar('close');
+      } catch (e) {
+        this.rollback();
+        throw e;
+      }
+    }
+    this.#abiertas--;
     if (--this.#nivel === 0) this.#cerrar();
   }
 
@@ -598,6 +678,7 @@ export class Model {
     if (this.#nivel === 0) throw new Error('no hay una transacción abierta (begin)');
     const inicio = /** @type {Foto} */ (this.#inicio);
     this.#nivel = 0;
+    this.#abiertas = 0;
     this.#inicio = null;
     this.#restaurar(inicio, 'rollback');
   }
@@ -659,7 +740,7 @@ export class Model {
 
   // ---------- crear ----------
 
-  /** @param {'piece' | 'assembly' | 'instance'} kind */
+  /** @param {'piece' | 'assembly' | 'instance' | 'relation'} kind */
   nextId(kind) {
     this.counters[kind] = (this.counters[kind] ?? 0) + 1;
     return `${PREFIJO[kind]}-${this.counters[kind]}`;
@@ -791,6 +872,7 @@ export class Model {
       }
       this.parts.delete(id);
       this.emit('disassemble', [id, ...kids]);
+      this.#limpiarRelaciones();
       return kids;
     });
   }
@@ -809,6 +891,7 @@ export class Model {
       for (const k of guardadas) this.parts.delete(k);
       this.emit('remove', ids);
       this.#limpiarRecortes();
+      this.#limpiarRelaciones();
     });
   }
 
@@ -870,6 +953,7 @@ export class Model {
           operations: clone(src.operations ?? []),
         };
         this.#put(real);
+        this.#copiarRelaciones(new Map([[src.id, id]]));
       } else {
         /** @type {AssemblyDef} */
         const real = { kind: 'assembly', id, name: inst.name, parent: inst.parent, frame: clone(inst.frame), children: [] };
@@ -877,7 +961,9 @@ export class Model {
         /** @type {Map<string, string>} */
         const copias = new Map();
         this.#patch(id, { children: src.children.map((c) => this.#copiar(c, id, copias)) });
+        copias.set(src.id, id);
         this.#remapear(copias);
+        this.#copiarRelaciones(copias);
       }
       this.emit('detach', [...new Set([...antes, ...this.subtree(id)])]);
       this.#limpiarRecortes();
@@ -1112,23 +1198,195 @@ export class Model {
       const copias = new Map();
       const nid = this.#copiar(id, src.parent, copias);
       this.#remapear(copias);
+      this.#copiarRelaciones(copias);
       if (src.parent) this.#patch(src.parent, { children: [...this.ownAssembly(src.parent).children, nid] });
       this.emit('add', this.subtree(nid));
       return nid;
     });
   }
 
+  // ---------- relaciones ----------
+  // Se guardan entre partes guardadas. Las de adentro de la fuente de una instancia se VEN también
+  // en la instancia, con ids de camino (`I-1/R-2`, entre `I-1/P-3` e `I-1/P-4`), y se leen como
+  // cualquier otra; se cambian en la fuente.
+
+  /** @param {RelationDef} rec */
+  #putRel(rec) {
+    this.relations.set(rec.id, deepFreeze(rec));
+  }
+
+  /** @param {unknown[]} parts */
+  #checkRelParts(parts) {
+    if (!Array.isArray(parts) || !parts.length) throw new TypeError('una relación va entre partes: parts es una lista de ids');
+    for (const p of parts) {
+      if (typeof p !== 'string') throw new TypeError(`parte inválida en la relación: ${String(p)}`);
+      if (!this.parts.has(p)) {
+        if (p.includes('/') && this.parts.has(p.split('/')[0])) throw new Error(`${p} es de adentro de la instancia ${p.split('/')[0]}: la relación va en su fuente, o se suelta la instancia con detach()`);
+        throw new Error(`no existe la parte ${p}`);
+      }
+    }
+    return /** @type {string[]} */ ([...parts]);
+  }
+
+  /**
+   * Una relación nueva. `kind` es su tipo (el modelo no lo interpreta); `data`, sus datos (van
+   * como JSON); `ops`, las operaciones de piezas que son de ella.
+   * @param {{ kind: string, parts: string[], data?: Record<string, any>, ops?: [string, string][], meta?: Record<string, any> | null }} spec
+   * @returns {string} el id
+   */
+  addRelation({ kind, parts, data = {}, ops = [], meta = null }) {
+    if (typeof kind !== 'string' || !kind) throw new TypeError('una relación necesita su kind');
+    return this.#paso(() => {
+      const ps = this.#checkRelParts(parts);
+      const id = this.nextId('relation');
+      this.#putRel(relacion({ id, kind, parts: ps, data, ops, broken: null, meta }));
+      this.emit('relation', [id, ...ps]);
+      return id;
+    });
+  }
+
+  /**
+   * Cambia los datos, las operaciones, el estado o lo de la app de una relación guardada. Pasar
+   * a rota avisa con 'relation-broken'.
+   * @param {string} id @param {{ data?: Record<string, any>, ops?: [string, string][], broken?: string | null, meta?: Record<string, any> | null }} cambios
+   */
+  updateRelation(id, cambios) {
+    this.#paso(() => {
+      const r = this.ownRelation(id);
+      const n = relacion({ ...r, ...cambios });
+      this.#putRel(n);
+      this.emit(n.broken && !r.broken ? 'relation-broken' : 'relation', [id, ...n.parts]);
+    });
+  }
+
+  /** Borra una relación, con las operaciones que son de ella. @param {string} id */
+  removeRelation(id) {
+    this.#paso(() => {
+      const r = this.ownRelation(id);
+      this.relations.delete(id);
+      this.#sacarOps(r.ops);
+      this.emit('relation-remove', [id, ...r.parts.filter((p) => this.parts.has(p))]);
+    });
+  }
+
+  /** Saca operaciones de piezas que sigan estando. @param {readonly (readonly [string, string])[]} ops */
+  #sacarOps(ops) {
+    /** @type {Map<string, Set<string>>} */
+    const por = new Map();
+    for (const [p, o] of ops) {
+      if (!por.has(p)) por.set(p, new Set());
+      /** @type {Set<string>} */ (por.get(p)).add(o);
+    }
+    for (const [p, os] of por) {
+      const rec = this.parts.get(p);
+      if (rec?.kind !== 'piece' || !rec.operations?.some((o) => os.has(o.id))) continue;
+      this.#patch(p, { operations: rec.operations.filter((o) => !os.has(o.id)) });
+      this.emit('operation', [p]);
+    }
+  }
+
+  /** Una relación guardada, para cambiarla. @param {string} id @returns {RelationDef} */
+  ownRelation(id) {
+    const r = this.relations.get(id);
+    if (r) return r;
+    if (id.includes('/')) throw new Error(`${id} es de adentro de una instancia: se cambia en su fuente, o se suelta la instancia con detach()`);
+    throw new Error(`no existe la relación ${id}`);
+  }
+
+  /** Una relación: guardada, o de adentro de una instancia (por su id de camino). @param {string} id @returns {RelationDef} */
+  relation(id) {
+    const r = this.relations.get(id) ?? (id.includes('/') ? this.allRelations().find((x) => x.id === id) : undefined);
+    if (!r) throw new Error(`no existe la relación ${id}`);
+    return r;
+  }
+
+  /**
+   * Todas las relaciones: las guardadas y, por cada instancia, las de adentro de su fuente, con
+   * ids de camino.
+   * @returns {RelationDef[]}
+   */
+  allRelations() {
+    const out = [...this.relations.values()];
+    if (!this.relations.size) return out;
+    /** @param {string} vista el id con que se ve la instancia @param {string} fuente */
+    const verAdentro = (vista, fuente) => {
+      /** @type {Map<string, string>} id guardado → cómo se ve adentro de la instancia */
+      const caminos = new Map([[fuente, vista]]);
+      /** @param {string} id @param {string} camino */
+      const bajar = (id, camino) => {
+        const p = this.parts.get(id);
+        if (p?.kind !== 'assembly') return;
+        for (const c of p.children) {
+          caminos.set(c, `${camino}/${c}`);
+          bajar(c, `${camino}/${c}`);
+        }
+      };
+      bajar(fuente, vista);
+      for (const r of this.relations.values()) {
+        if (!r.parts.every((p) => caminos.has(p))) continue;
+        out.push(deepFreeze({ ...r, id: `${vista}/${r.id}`, parts: r.parts.map((p) => /** @type {string} */ (caminos.get(p))), ops: [] }));
+      }
+      for (const [id, camino] of caminos) {
+        const p = this.parts.get(id);
+        if (p?.kind === 'instance') verAdentro(camino, p.source);
+      }
+    };
+    for (const p of [...this.parts.values()]) if (p.kind === 'instance') verAdentro(p.id, p.source);
+    return out;
+  }
+
+  /** Las relaciones donde está una parte (por su id, también uno de camino). @param {string} partId @returns {RelationDef[]} */
+  relationsOf(partId) {
+    return this.allRelations().filter((r) => r.parts.includes(partId));
+  }
+
+  /** Borra las relaciones que apuntan a partes que ya no están, con sus operaciones. Va en el mismo paso. */
+  #limpiarRelaciones() {
+    for (const r of [...this.relations.values()]) {
+      if (r.parts.every((p) => this.parts.has(p))) continue;
+      this.relations.delete(r.id);
+      this.#sacarOps(r.ops);
+      this.emit('relation-remove', [r.id, ...r.parts.filter((p) => this.parts.has(p))]);
+    }
+  }
+
+  /**
+   * Copia las relaciones cuyas partes se copiaron todas, con los ids nuevos. A una pieza copiada
+   * se le sacan las operaciones de una relación que no se copió (la unión con algo que quedó
+   * afuera): la copia no tiene esa unión.
+   * @param {Map<string, string>} copias viejo → nuevo
+   */
+  #copiarRelaciones(copias) {
+    const nuevas = [];
+    for (const r of [...this.relations.values()]) {
+      const enCopia = r.ops.filter(([p]) => copias.has(p));
+      if (r.parts.every((p) => copias.has(p))) {
+        const id = this.nextId('relation');
+        /** @param {string} p */
+        const m = (p) => /** @type {string} */ (copias.get(p));
+        this.#putRel(relacion({ ...r, id, parts: r.parts.map(m), ops: r.ops.filter(([p]) => copias.has(p)).map(([p, o]) => [m(p), o]) }));
+        nuevas.push(id);
+      } else if (enCopia.length) {
+        this.#sacarOps(enCopia.map(([p, o]) => [/** @type {string} */ (copias.get(p)), o]));
+      }
+    }
+    if (nuevas.length) this.emit('relation', nuevas);
+  }
+
   // ---------- guardar ----------
 
   toJSON() {
-    return { version: VERSION_DOCUMENTO, units: this.units, counters: { ...this.counters }, parts: [...this.parts.values()].map(clone) };
+    return {
+      version: VERSION_DOCUMENTO, units: this.units, counters: { ...this.counters },
+      parts: [...this.parts.values()].map(clone), relations: [...this.relations.values()].map(clone),
+    };
   }
 
   /**
    * Carga un documento. La unidad es la del documento: uno guardado antes de que se guardara la
    * unidad estaba en cm, que era lo único que había. Cargar un documento borra el historial
    * (no se puede deshacer una carga).
-   * @param {{ units?: Unit, counters: Record<string, number>, parts: StoredPart[] }} data
+   * @param {{ units?: Unit, counters: Record<string, number>, parts: StoredPart[], relations?: RelationDef[] }} data
    */
   load(data) {
     this.#sinTransaccion('cargar un documento');
@@ -1139,13 +1397,16 @@ export class Model {
     const units = checkUnit(data.units ?? 'cm');
     const parts = new Map(data.parts.map((p) => [p.id, /** @type {StoredPart} */ (deepFreeze(clone(p)))]));
     validate(parts);
-    const ids = [...this.parts.keys()];
+    const relations = new Map((data.relations ?? []).map((r) => [r.id, deepFreeze(relacion(r))]));
+    validateRelations(relations, parts);
+    const ids = [...this.parts.keys(), ...this.relations.keys()];
     this.units = units;
     this.parts = parts;
-    this.counters = { piece: 0, assembly: 0, instance: 0, ...data.counters };
+    this.relations = relations;
+    this.counters = { piece: 0, assembly: 0, instance: 0, relation: 0, ...data.counters };
     this.#pasos.length = 0; // un documento nuevo no tiene pasado
     this.#rehacer.length = 0;
-    this.emit('load', [...ids, ...this.parts.keys()]);
+    this.emit('load', [...ids, ...this.parts.keys(), ...this.relations.keys()]);
   }
 
   /** El árbol como texto, para la consola. @param {string | null} [id] @param {number} [depth] @returns {string} */

@@ -12,8 +12,13 @@ bruto más una lista de operaciones, y la forma que resulta es un cálculo) y
 [#7](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/7) (formas reales: perfiles,
 torneados y su geometría), [#8](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/8)
 (agarre), [#9](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/9) (colocación) y
-[#10](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/10) (recortes entre piezas) y
-[#11](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/11) (estirar un conjunto).
+[#10](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/10) (recortes entre piezas),
+[#11](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/11) (estirar un conjunto),
+[#12](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/12) (relaciones entre partes:
+[#13](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/13) juntas,
+[#14](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/14) uniones y
+[#15](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/15) vínculos) y
+[#16](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/16) (despiece).
 
 ### Breaking
 
@@ -26,9 +31,10 @@ torneados y su geometría), [#8](https://github.com/EasyIndustry/ThreeJS-cad-SDK
 - `Face`: `localAxis` y `localSide` pueden ser null (una cara que no mira hacia un eje de la
   pieza), suma `holes`, y `area` descuenta los agujeros.
 
-- **`toJSON()` escribe `version: 4`** (las piezas traen `operations`). Esta versión carga los
-  documentos de antes; uno guardado con ella **no lo lee bien la 0.6.0**, que no sabía de
-  versiones y perdería las operaciones sin avisar. Desde esta versión, `load()` rechaza un
+- **`toJSON()` escribe `version: 5`** (las piezas traen `operations`, y el documento,
+  `relations` y `counters.relation`). Esta versión carga los documentos de antes; uno guardado
+  con ella **no lo lee bien la 0.6.0**, que no sabía de versiones y perdería las operaciones y
+  las relaciones sin avisar. Desde esta versión, `load()` rechaza un
   documento de un formato más nuevo que el que entiende, en vez de cargarlo a medias.
 - `shape` es solo la forma del bruto (perfil, torneado). Los cortes por contorno, que en la app
   viajaban como `shape.kind === 'cut'`, pasan a ser operaciones `{ kind: 'cut', axis, outline }`
@@ -72,6 +78,24 @@ torneados y su geometría), [#8](https://github.com/EasyIndustry/ThreeJS-cad-SDK
   curva; de ahí salen los vértices y las aristas reales.
 - La forma se cachea por lo que la define (medidas, forma del bruto, operaciones): mover no la
   recalcula, las instancias comparten la de su fuente y deshacer vuelve a encontrarla.
+- Relaciones entre partes, en el documento: entran en el deshacer, se guardan, se limpian si se
+  borra una de sus partes y se copian al duplicar o soltar; las de la fuente de una instancia se
+  ven en ella con ids de camino. `taller.relation(id)`, `taller.relations({ kind?, part? })`,
+  `Relation` (`kind`, `parts`, `broken`, `meta`, `setMeta`, `remove`), eventos `'relation'`,
+  `'relation-broken'` y `'relation-remove'`. `RELATION_KINDS`. En el modelo:
+  `model.addRelation`, `updateRelation`, `removeRelation`, `relation`, `allRelations`,
+  `relationsOf`.
+- Juntas: `taller.addJoint({ type: 'revolute' | 'prismatic', moving, base, axis, limits? })`,
+  `joint.at(value)` (sin tocar el modelo), `joint.setLimits`, `taller.hingeCandidates(móvil, base)`
+  y `taller.slideCandidates(móvil, base)`, en el marco de la base. `JOINT_TYPES`.
+- Uniones: `taller.addFixing({ a, b, points? | count?, holes?, policy? })`, con puntos
+  normalizados sobre el parche de contacto, agujeros como operaciones de las dos piezas y
+  política `'break' | 'remove'` si se separan. `fixing.points` (con el espesor atravesado),
+  `fixing.direction`, `fixing.update(...)`. `pieza.thicknessAt(punto, dirección)`.
+- Vínculos: `taller.addLink({ base, face, moving, gap? })` y `taller.validateLink(spec)`; una punta
+  anclada mueve, dos estiran, en cascada y en el mismo paso de deshacer. `link.setGap(gap)`.
+- Despiece: `taller.cutList({ groupBy? })`, con filas
+  `{ stock, material, length, width, thickness, count, ids, fixings }`.
 
 ### Changed
 
