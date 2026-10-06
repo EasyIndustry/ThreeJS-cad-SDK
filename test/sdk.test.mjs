@@ -13,6 +13,7 @@ import {
   arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, tolerancesFor, Mesh, OPERATION_KINDS, SECTIONS,
 } from '../src/index.js';
 import * as sdk from '../src/index.js';
+import { sameFeature, GRAB_RATIO } from '../src/index.js';
 import { Model } from '../src/model.js';
 import { memberNames } from '../src/help.js';
 import * as F from '../src/frame.js';
@@ -899,12 +900,12 @@ const POR_CM = { mm: 10, cm: 1, m: 0.01, in: 1 / 2.54, ft: 1 / 30.48 }; // cuán
 
 test('las tolerancias sugeridas salen de config.js y se llevan a la unidad del documento', () => {
   assert.equal(createWorkshop().units, 'cm', 'sin decir nada, cm');
-  assert.deepEqual({ ...createWorkshop().tolerances }, { touch: 0.2, penetration: 0.15 }, 'y lo de siempre');
+  assert.deepEqual({ ...createWorkshop().tolerances }, { touch: 0.2, penetration: 0.15, grab: 1, snap: 2.5 }, 'y lo de siempre');
   const de = (units) => Object.values(createWorkshop({ units }).tolerances);
-  cerca(de('mm'), [2, 1.5], 1e-12);
-  cerca(de('m'), [0.002, 0.0015], 1e-12);
-  cerca(de('in'), [1 / 16, 3 / 64], 1e-12, 'imperial: en fracciones de pulgada, no en un 0,0787 que nadie dice');
-  cerca(de('ft'), [1 / 192, 3 / 768], 1e-12);
+  cerca(de('mm'), [2, 1.5, 10, 25], 1e-12);
+  cerca(de('m'), [0.002, 0.0015, 0.01, 0.025], 1e-12);
+  cerca(de('in'), [1 / 16, 3 / 64, 3 / 8, 1], 1e-12, 'imperial: en fracciones de pulgada, no en un 0,0787 que nadie dice');
+  cerca(de('ft'), [1 / 192, 3 / 768, 1 / 32, 1 / 12], 1e-12);
   assert.deepEqual(TOLERANCE_PRESETS.metric.unit, 'mm');
   assert.deepEqual(TOLERANCE_PRESETS.imperial.unit, 'in');
 });
@@ -931,7 +932,7 @@ test('la misma escena física da las mismas respuestas en cualquier unidad', () 
 
 test('las tolerancias se pisan al crear el taller, y una tolerancia puntual gana', () => {
   const t = createWorkshop({ units: 'mm', tolerances: { touch: 5 } });
-  assert.deepEqual({ ...t.tolerances }, { touch: 5, penetration: 1.5 }, 'lo no pisado sigue siendo lo sugerido');
+  assert.deepEqual({ ...t.tolerances }, { touch: 5, penetration: 1.5, grab: 10, snap: 25 }, 'lo no pisado sigue siendo lo sugerido');
   const a = t.addPiece({ size: [400, 20, 300], center: [0, 10, 0] });
   const b = t.addPiece({ size: [400, 20, 300], center: [0, 34, 0] });          // a 4 mm
   assert.ok(a.touches(b), 'con touch 5, a 4 mm se tocan');
@@ -969,7 +970,7 @@ test('la unidad viaja con el documento: se guarda, se carga, y un documento viej
 
 test('config.js: tolerancesFor lleva lo sugerido a la unidad pedida, y convertLength convierte', () => {
   cerca([convertLength(25.4, 'mm', 'in'), convertLength(1, 'ft', 'in'), convertLength(1, 'm', 'cm')], [1, 12, 100], 1e-12);
-  assert.deepEqual({ ...tolerancesFor('cm', { penetration: 0.5 }) }, { touch: 0.2, penetration: 0.5 });
+  assert.deepEqual({ ...tolerancesFor('cm', { penetration: 0.5 }) }, { touch: 0.2, penetration: 0.5, grab: 1, snap: 2.5 });
   assert.ok(Object.isFrozen(tolerancesFor('mm')) && Object.isFrozen(TOLERANCE_PRESETS) && Object.isFrozen(UNITS));
 });
 
@@ -1519,11 +1520,99 @@ test('la malla de una forma sabe sus superficies, y las curvas están marcadas',
   assert.equal(m.smooth.filter(Boolean).length, 1, 'el costado de la barra es una sola superficie curva');
 });
 
+// ---------- agarre: el vértice, la arista o la cara más cercana ----------
+
+test('larguero girado 45°: un punto cerca de su esquina da el vértice, exacto', () => {
+  const t = createWorkshop();
+  const l = larguero(t, [10, 5, 0]).rotate(45, 'z');
+  const esquina = l.vertices[0];
+  const g = l.closest(esquina.add([0.3, -0.2, 0.1]));
+  assert.equal(g.kind, 'vertex');
+  assert.ok(g.point.equals(esquina, 1e-9));
+  assert.equal(g.piece, l.id);
+});
+
+test('tabla de 1,8: a 0,5 del canto largo es arista; a 3, cara; en el medio del canto, cara', () => {
+  const t = createWorkshop();
+  const tabla = t.addPiece({ size: [90, 1.8, 50], center: [0, 0.9, 0] }); // arriba en y = 1,8; canto largo en z = 25
+  const arista = tabla.closest([0, 1.8, 24.5]);
+  assert.equal(arista.kind, 'edge');
+  assert.ok(arista.point.equals([0, 1.8, 25], 1e-9), 'llevado a la arista');
+  cerca([arista.edge.length], [90]);
+  const cara = tabla.closest([0, 1.8, 22]);
+  assert.equal(cara.kind, 'face');
+  assert.deepEqual([cara.face.localAxis, cara.face.localSide], ['y', 1]);
+  const canto = tabla.closest([0, 0.9, 25]);
+  assert.equal(canto.kind, 'face', `la franja del canto es ${GRAB_RATIO * 1.8}, no 1: no se come el espesor`);
+  assert.equal(tabla.closest([0, 30, 0]), null, 'lejos de todo: nada');
+});
+
+test('un rayo que atraviesa dos piezas devuelve la más cercana al origen, y se puede excluir', () => {
+  const t = createWorkshop();
+  const a = t.addPiece({ size: [10, 10, 10], center: [0, 0, 0] });
+  const b = t.addPiece({ size: [10, 10, 10], center: [30, 0, 0] });
+  const h = t.pick({ origin: [-50, 1, 2], direction: [1, 0, 0] });
+  assert.equal(h.part.id, a.id);
+  assert.ok(h.point.equals([-5, 1, 2], 1e-9));
+  cerca([h.distance], [45]);
+  assert.ok(h.normal.equals([-1, 0, 0], 1e-9));
+  assert.equal(t.pick({ origin: [-50, 1, 2], direction: [1, 0, 0] }, { exclude: [a] }).part.id, b.id);
+  assert.equal(t.pick({ origin: [-50, 50, 2], direction: [1, 0, 0] }), null);
+});
+
+test('dentro de un ensamble girado, una pieza da lo mismo que suelta con el mismo marco', () => {
+  const t = createWorkshop();
+  const a = larguero(t, [0, 5, 0]);
+  const e = t.assemble([a, larguero(t, [0, 5, 50])]);
+  e.rotate(30, 'y').rotate(15, 'x');
+  const u = createWorkshop();
+  const suelta = u.addPiece({ size: [200, 4, 10], placement: a.placement, center: [0, 0, 0] });
+  suelta.transform(Transform.translation(a.placement.translationVector));
+  const q = a.vertices[3].add([0.2, 0.2, -0.1]);
+  const [g1, g2] = [e.closest(q), suelta.closest(q)];
+  assert.equal(g1.kind, g2.kind);
+  assert.ok(g1.point.equals(g2.point, 1e-9));
+  const r = { origin: a.boundingBox.center.add([0, 50, 0]), direction: [0, -1, 0.05] };
+  const [p1, p2] = [t.pick(r), u.pick(r)];
+  assert.ok(p1 && p2 && p1.point.equals(p2.point, 1e-9));
+});
+
+test('con formas reales: el caño ofrece sus vértices; la barra redonda, ni vértices ni aristas en lo curvo', () => {
+  const t = createWorkshop();
+  const cano = t.addPiece({ size: [100, 4, 4], shape: CANO });
+  assert.equal(cano.closest([50, 2, 2.1]).kind, 'vertex');
+  const barra = t.addPiece({ size: [4, 4, 50], shape: BARRA(2), center: [20, 0, 100] });
+  assert.equal(barra.closest([22, 0, 100]), null, 'sobre la superficie curva no hay nada que agarrar');
+  const tapa = barra.closest([21.9, 0, 124.9]);
+  assert.equal(tapa.kind, 'face', 'cerca del borde circular de la tapa: la tapa, no una arista curva');
+  const h = t.pick({ origin: [30, 1.95, 100], direction: [-1, 0, 0] });
+  assert.ok(h && Math.abs(h.point.x - (20 + Math.sqrt(4 - 1.95 ** 2))) < 0.05, 'el rayo corta el cilindro, no su caja');
+  assert.equal(t.pick({ origin: [21.9, 1.9, 200], direction: [0, 0, -1] }, { exclude: [cano] }), null, 'a lo largo, por la esquina de la caja (afuera del cilindro), no corta');
+  assert.equal(t.pick({ origin: [21.3, 1.3, 200], direction: [0, 0, -1] }, { exclude: [cano] }).part.id, barra.id, 'un poco más adentro, sí');
+});
+
+test('sameFeature: mientras el cursor sigue sobre el mismo rasgo, es el mismo', () => {
+  const t = createWorkshop();
+  const tabla = t.addPiece({ size: [90, 1.8, 50], center: [0, 0.9, 0] });
+  assert.ok(sameFeature(tabla.closest([0, 1.8, 0]), tabla.closest([10, 1.8, -5])));
+  assert.ok(!sameFeature(tabla.closest([0, 1.8, 0]), tabla.closest([0, 1.8, 24.6])));
+  assert.ok(sameFeature(tabla.closest([0, 1.8, 24.6]), tabla.closest([20, 1.8, 24.8])), 'la misma arista');
+  assert.ok(!sameFeature(null, null));
+});
+
+test('closest en el marco de la parte (space: local)', () => {
+  const t = createWorkshop();
+  const l = larguero(t, [100, 0, 0]).rotate(90, 'y');
+  const g = l.closest([99.8, 1.9, 4.9], { space: 'local' });
+  assert.equal(g.kind, 'vertex');
+  assert.ok(g.point.equals([100, 2, 5], 1e-9));
+});
+
 // ---------- que el SDK siga siendo puro ----------
 
 test('el SDK no depende de ningún paquete externo ni del navegador (lo puede usar el servidor)', async () => {
   const { readFile } = await import('node:fs/promises');
-  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/units.js', 'src/config.js', 'src/solid.js', 'src/polygon.js', 'src/convex.js', 'src/sections.js', 'src/features.js', 'src/index.js', 'examples/demo.js']) {
+  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/units.js', 'src/config.js', 'src/solid.js', 'src/polygon.js', 'src/convex.js', 'src/sections.js', 'src/features.js', 'src/grab.js', 'src/index.js', 'examples/demo.js']) {
     const src = await readFile(new URL(`../${f}`, import.meta.url), 'utf8');
     const sin = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
     const ext = [...sin.matchAll(/^\s*(?:import|export)[^'"]*?from\s*['"]([^'"]+)['"]/gm)]

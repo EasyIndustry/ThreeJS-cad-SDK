@@ -264,6 +264,28 @@ taller.contacts({ exact: true });
 La forma real se arma con pedazos convexos (`src/convex.js`), así que el contacto exacto no
 necesita kernel. Un contacto contra una superficie curva es la línea donde apoya.
 
+## Agarre
+
+Lo que necesita un imán: qué rasgo de una pieza está debajo del cursor, y qué pieza corta un rayo.
+
+```js
+const g = pieza.closest(punto);         // { kind: 'vertex' | 'edge' | 'face', piece, point, edge, face, key } o null
+g.point;                                // el punto llevado al rasgo (a la arista: solo corre a lo largo)
+sameFeature(g, pieza.closest(otro));    // ¿sigue sobre lo mismo? (para no redibujar)
+taller.pick({ origin, direction });     // { part, point, distance, normal } o null, sin three
+taller.pick(rayo, { exclude: [arrastrada] });
+```
+
+- Se calcula en el marco de cada pieza: anda igual con la pieza girada o adentro de un ensamble
+  girado. Usa los rasgos reales (los de una caja, o los de su forma): no ofrece aristas sobre una
+  superficie curva.
+- Se prefiere un vértice a una arista y una arista a una cara.
+- **La franja es por eje:** `taller.tolerances.grab` (10 mm, o 3/8 in), pero nunca más que
+  `GRAB_RATIO` (0,3) del largo de ese eje. En una tabla de 1,8 cm, la franja del canto es de
+  0,54: no se come el espesor. Se puede pasar otra: `closest(p, { tolerance })`.
+- `pick` corta contra la forma real (un rayo por la esquina de la caja de una barra redonda no
+  la toca), con la caja de cada pieza como filtro rápido.
+
 ## Bruto y operaciones
 
 **Una pieza es su bruto** —lo que se compra y se corta: sus medidas, la forma de su bruto si no

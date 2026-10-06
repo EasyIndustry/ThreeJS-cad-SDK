@@ -10,7 +10,8 @@ en una app antes del release (ver `CONTRIBUTING.md`).
 Responde a [#6](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/6) (la pieza es su
 bruto más una lista de operaciones, y la forma que resulta es un cálculo) y
 [#7](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/7) (formas reales: perfiles,
-torneados y su geometría).
+torneados y su geometría) y [#8](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/8)
+(agarre).
 
 ### Breaking
 
@@ -48,6 +49,11 @@ torneados y su geometría).
 - Contacto y choque exactos, con la forma real: `{ exact: true }` en `touches`, `intersects`,
   `contactsWith`, `intersectionsWith`, `taller.contacts` y `taller.collisions`. Un contacto contra
   una superficie curva es la línea donde apoya.
+- Agarre: `parte.closest(punto, { tolerance?, space? })` (vértice, arista o cara más cercana,
+  con franja por eje), `taller.pick(rayo, { exclude? })` (la primera pieza que corta, contra su
+  forma real) y `sameFeature(a, b)`.
+- `taller.tolerances` suma `grab` (agarre) y `snap` (imán), y `GRAB_RATIO`: valores sugeridos en
+  `config.js`.
 - `Mesh.surfaces` y `Mesh.smooth`: qué triángulos son la misma cara y cuáles aproximan una
   curva; de ahí salen los vértices y las aristas reales.
 - La forma se cachea por lo que la define (medidas, forma del bruto, operaciones): mover no la

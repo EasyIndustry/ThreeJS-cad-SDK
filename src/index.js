@@ -28,15 +28,16 @@ import { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Interse
 import { obbOf, satDepth, intersectBoxes, contactsOf, candidatePairs } from './contact.js';
 import { arrayTransforms } from './array.js';
 import { UNITS, convertLength } from './units.js';
-import { TOLERANCE_PRESETS, tolerancesFor } from './config.js';
+import { TOLERANCE_PRESETS, GRAB_RATIO, tolerancesFor } from './config.js';
+import { closestFeature, rayMesh, rayBox } from './grab.js';
 import { solidOf, convexPartsOf, checkKernel, OPERATION_KINDS } from './solid.js';
 import { SECTIONS, checkShape, resolveSection } from './sections.js';
 import { featuresOf } from './features.js';
 import { transformConvex, depth as hondura, contacts as contactosConvexos, intersect as cruce, volume as volumen } from './convex.js';
-import { apply } from './frame.js';
+import { apply, invert, compose, rotate as rotar, transpose3 } from './frame.js';
 import { help } from './help.js';
 
-export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, Mesh, OPERATION_KINDS, SECTIONS, arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, tolerancesFor };
+export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, Mesh, OPERATION_KINDS, SECTIONS, arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, GRAB_RATIO, tolerancesFor };
 
 /** @typedef {import('./model.js').Space} Space */
 /** @typedef {import('./geometry.js').PointLike} PointLike */
@@ -198,6 +199,31 @@ function intersecciones(c, as, bs, tol, exact = false) {
     if (r) out.push(new Intersection({ a: x, b: y, volume: r.volume, depth, vertices: r.vertices, faces: r.faces }));
   }
   return Object.freeze(out);
+}
+
+/**
+ * Los rasgos de una pieza, en su marco: los de su caja, o los de su forma real.
+ * @param {Ctx} c @param {string} id @returns {import('./grab.js').Rasgos}
+ */
+function rasgosDe(c, id) {
+  const m = c.model, p = m.piece(id);
+  if (esCaja(p)) return { vertices: m.cornersLocal(p), edges: m.edges(id, 'local'), faces: m.faces(id, 'local').map((f) => ({ outer: f.corners, holes: [], normal: f.normal })) };
+  return c.features(id);
+}
+
+/**
+ * Lo que devuelve `closest`: qué se agarró (un vértice, una arista o una cara de una pieza) y el
+ * punto llevado a él. `key` lo identifica: dos resultados con la misma `key` son el mismo rasgo.
+ * @typedef {{ kind: 'vertex' | 'edge' | 'face', piece: string, point: Point3d, edge: Line | null, face: Face | null, key: string }} Grab
+ */
+
+/**
+ * ¿Dos agarres son el mismo rasgo de la misma pieza? Sirve para no redibujar mientras el
+ * cursor sigue sobre lo mismo.
+ * @param {Grab | null} a @param {Grab | null} b
+ */
+export function sameFeature(a, b) {
+  return !!a && !!b && a.key === b.key;
 }
 
 /** Lo que hace de clave cuando una pieza no tiene forma de bruto u operaciones (un WeakMap no acepta null). */
@@ -367,6 +393,52 @@ export class Part {
     return intersecciones(c, piezasDe(m, this.id), piezasDe(m, idDe(other)), tolerance ?? c.tolerances().penetration, exact);
   }
 
+  /**
+   * El vértice, la arista o la cara (de sus piezas) más cercana a un punto, con el punto llevado
+   * a ella; null si no hay ninguna a la distancia del agarre. Se prefiere un vértice a una arista
+   * y una arista a una cara. La franja de cada eje de una pieza es `tolerance` (la del taller si
+   * no se dice), pero no más que GRAB_RATIO del largo de ese eje.
+   * @param {PointLike} point @param {{ tolerance?: number, space?: Space }} [opts] `space`: en qué marco va el punto y sale el resultado
+   * @returns {Grab | null}
+   */
+  closest(point, { tolerance, space = 'world' } = {}) {
+    const c = ctx(this), m = c.model;
+    const T = tolerance ?? c.tolerances().grab;
+    const propio = m.worldFrame(this.id);
+    const pw = space === 'local' ? apply(propio, vec3(point, 'punto')) : vec3(point, 'punto');
+    /** @type {{ h: NonNullable<ReturnType<typeof closestFeature>>, id: string, W: import('./frame.js').Frame, rango: number } | null} */
+    let mejor = null;
+    for (const p of m.piecesOf(this.id)) {
+      const W = m.worldFrame(p.id);
+      const tol = /** @type {[number, number, number]} */ (p.size.map((x) => Math.min(T, GRAB_RATIO * x)));
+      const h = closestFeature(apply(invert(W), pw), rasgosDe(c, p.id), tol);
+      if (!h) continue;
+      const rango = h.kind === 'vertex' ? 0 : h.kind === 'edge' ? 1 : 2;
+      if (!mejor || rango < mejor.rango || (rango === mejor.rango && h.d < mejor.h.d)) mejor = { h, id: p.id, W, rango };
+    }
+    if (!mejor) return null;
+    const { h, id, W } = mejor;
+    const F = space === 'local' ? compose(invert(propio), W) : W;
+    const r6 = (/** @type {number[]} */ v) => v.map((x) => Math.round(x * 1e6) / 1e6).join(',');
+    /** @type {Grab} */
+    let out;
+    if (h.kind === 'vertex') out = { kind: 'vertex', piece: id, point: new Point3d(...apply(F, h.point)), edge: null, face: null, key: `${id}:v:${r6(h.point)}` };
+    else if (h.kind === 'edge') {
+      const [a, b] = h.edge;
+      const k = [r6(a), r6(b)].sort().join('|');
+      out = { kind: 'edge', piece: id, point: new Point3d(...apply(F, h.point)), edge: new Line(apply(F, a), apply(F, b)), face: null, key: `${id}:e:${k}` };
+    } else {
+      const f = h.face, n = f.normal, k = n.findIndex((v) => Math.abs(v) > 1 - 1e-9);
+      const center = /** @type {[number, number, number]} */ ([0, 1, 2].map((i) => f.outer.reduce((acc, v) => acc + v[i], 0) / f.outer.length));
+      const face = new Face({
+        piece: id, localAxis: k < 0 ? null : AXES[k], localSide: k < 0 ? null : /** @type {1 | -1} */ (Math.sign(n[k])),
+        normal: n, center, vertices: f.outer, holes: f.holes,
+      }).transform(new Transform(F));
+      out = { kind: 'face', piece: id, point: new Point3d(...apply(F, h.point)), edge: null, face, key: `${id}:f:${r6(n)}:${r6(center)}` };
+    }
+    return Object.freeze(out);
+  }
+
   toString() { return `${this.kind === 'piece' ? 'Piece' : 'Assembly'} ${this.id} «${this.name}»`; }
 
   /** @type {Member[]} */
@@ -395,6 +467,7 @@ export class Part {
     ['intersects(other, { tolerance?, exact? })', '¿se mete en la otra? (más de tolerances.penetration)'],
     ['contactsWith(other, { tolerance?, exact? })', 'dónde se toca con la otra (Contact). Con ella misma: sus uniones internas'],
     ['intersectionsWith(other, { tolerance?, exact? })', 'lo que comparte de volumen con la otra (Intersection)'],
+    ['closest(point, { tolerance?, space? })', "el vértice, la arista o la cara más cercana: { kind, piece, point, edge, face, key }, o null"],
     ['toString()', 'para leer'],
     ['help()', 'esta tabla'],
   ];
@@ -671,6 +744,34 @@ export function createWorkshop(init = {}) {
       const ts = arrayTransforms(spec, { origin: p.boundingBox.center });
       return model.transaction(() => Object.freeze(ts.slice(1).map((t) => instantiate(p, { placement: t }))));
     },
+    /**
+     * La primera pieza que corta un rayo (contra su forma real) y dónde: { part, point,
+     * distance, normal }, o null. Sin three: para pruebas, para el servidor, o para elegir
+     * sin escena. `exclude`: partes que no cuentan (la que se está arrastrando).
+     * @param {{ origin: PointLike, direction: VectorLike }} ray @param {{ exclude?: (Part | string)[] }} [opts]
+     */
+    pick(ray, { exclude = [] } = {}) {
+      const o = vec3(ray?.origin, 'origen del rayo');
+      const d0 = vec3(ray?.direction, 'dirección del rayo');
+      const L = Math.hypot(...d0);
+      if (!L) throw new Error('la dirección del rayo no puede ser nula');
+      const d = /** @type {[number, number, number]} */ (d0.map((v) => v / L));
+      const fuera = new Set(exclude.flatMap((x) => model.piecesOf(idDe(x)).map((p) => p.id)));
+      /** @type {{ id: string, t: number, n: [number, number, number] } | null} */
+      let mejor = null;
+      for (const p of model.allPieces()) {
+        if (fuera.has(p.id)) continue;
+        const W = model.worldFrame(p.id), inv = invert(W);
+        const ol = apply(inv, o), dl = rotar(transpose3(W.r), d);
+        const entra = rayBox(ol, dl, /** @type {[number, number, number]} */ (p.size.map((x) => x / 2)));
+        if (entra === null || (mejor && entra > mejor.t)) continue;
+        const h = rayMesh(ol, dl, c.solid(p.id));
+        if (h && (!mejor || h.t < mejor.t)) mejor = { id: p.id, t: h.t, n: rotar(W.r, h.normal) };
+      }
+      if (!mejor) return null;
+      const { id, t, n } = mejor;
+      return Object.freeze({ part: c.part(id), point: new Point3d(o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t), distance: t, normal: new Vector3d(...n) });
+    },
     /** @param {string} id */
     part(id) { return c.part(id); },
     get parts() { return Object.freeze([...model.parts.keys()].map((id) => c.part(id))); },
@@ -728,6 +829,7 @@ export const WORKSHOP_MEMBERS = [
   ['assemble(parts, { name? })', 'un ensamble con esas partes hermanas; se anida, no se aplasta'],
   ['instantiate(part, { name?, parent?, placement? })', 'una instancia: la misma parte colocada otra vez; editar la fuente cambia todas'],
   ['array(part, spec)', "repetir una parte en línea, en área o alrededor de un eje: crea instancias (ver arrayTransforms)"],
+  ['pick(ray, { exclude? })', 'la primera pieza que corta un rayo { origin, direction }, contra su forma real: { part, point, distance, normal }, o null'],
   ['part(id)', 'una parte por su id'],
   ['parts', 'todas las partes'],
   ['roots', 'las partes de primer nivel (las que no están en un ensamble)'],
