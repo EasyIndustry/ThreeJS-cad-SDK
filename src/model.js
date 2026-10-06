@@ -31,6 +31,7 @@
 import { frame, compose, invert, apply, rotate, turn, transpose3, isQuarterTurn, axisIndex } from './frame.js';
 import { DEFAULT_UNIT, checkUnit } from './units.js';
 import { checkOperation } from './solid.js';
+import { checkShape } from './sections.js';
 
 /** @typedef {import('./frame.js').Vec3} Vec3 */
 /** @typedef {import('./frame.js').Mat3} Mat3 */
@@ -58,7 +59,7 @@ import { checkOperation } from './solid.js';
  * @property {Vec3} size         medidas en la unidad del documento, sobre los ejes locales x, y, z
  * @property {Axes} axes
  * @property {string} material
- * @property {object | null} shape  forma del bruto (perfil, torneado), o null si es una caja
+ * @property {import('./sections.js').Shape | null} shape  forma del bruto (perfil, torneado), o null si es una caja
  * @property {Operation[]} [operations]  lo que se le hace al bruto, en orden (ver solid.js)
  * @property {string} [source]   solo en lo que sale de una instancia: la parte de la que es copia
  */
@@ -661,7 +662,7 @@ export class Model {
   }
 
   /**
-   * @param {{ name?: string, size: Vec3, material?: string, shape?: object | null,
+   * @param {{ name?: string, size: Vec3, material?: string, shape?: unknown,
    *           at?: Vec3, r?: Mat3, axes?: Axes, parent?: string | null }} spec
    *   `at`: dónde queda su centro, en el espacio del padre (el mundo si no tiene).
    *   `r`: su rotación inicial en ese mismo espacio (identidad si no se da), para crearla ya
@@ -678,7 +679,7 @@ export class Model {
       const p = {
         kind: 'piece', id, name: name || `Pieza ${this.counters.piece}`, parent: null,
         frame: frame(at, r), size: [...size], axes: axes ? checkAxes(axes) : axesBySize(size),
-        material, shape: shape ? clone(shape) : null, operations: [],
+        material, shape: checkShape(shape), operations: [],
       };
       this.#put(p);
       if (parent) this.adopt(parent, [id], { keepWorld: false });
@@ -951,6 +952,19 @@ export class Model {
       this.ownPiece(id);
       this.#patch(id, { material });
       this.emit('material', [id]);
+    });
+  }
+
+  /**
+   * Cambia la forma del bruto (perfil, torneado; null: una caja). Las medidas y las operaciones
+   * quedan como estaban.
+   * @param {string} id @param {unknown} shape
+   */
+  setShape(id, shape) {
+    this.#paso(() => {
+      this.ownPiece(id);
+      this.#patch(id, { shape: checkShape(shape) });
+      this.emit('shape', [id]);
     });
   }
 

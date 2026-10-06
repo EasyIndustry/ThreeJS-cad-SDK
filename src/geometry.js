@@ -284,34 +284,49 @@ export class BoundingBox {
 
 export class Face {
   /**
-   * Una cara de una pieza. `localAxis` y `localSide` dicen cuál es EN LA PIEZA (la +x local
-   * sigue siendo la +x aunque la pieza esté girada); lo demás está en el espacio en que se
-   * pidió.
-   * @param {{ piece: string, localAxis: 'x' | 'y' | 'z', localSide: 1 | -1, normal: VectorLike, center: PointLike, vertices: PointLike[] }} f
+   * Una cara plana de una pieza. `localAxis` y `localSide` dicen cuál es EN LA PIEZA (la +x
+   * local sigue siendo la +x aunque la pieza esté girada), o son null si la cara no mira hacia
+   * un eje de la pieza (un chanfle). Lo demás está en el espacio en que se pidió. `holes`: los
+   * agujeros que tiene (la tapa de un caño).
+   * @param {{ piece: string, localAxis: 'x' | 'y' | 'z' | null, localSide: 1 | -1 | null, normal: VectorLike, center: PointLike,
+   *           vertices: PointLike[], holes?: PointLike[][] }} f
    */
-  constructor({ piece, localAxis, localSide, normal, center, vertices }) {
+  constructor({ piece, localAxis, localSide, normal, center, vertices, holes = [] }) {
     /** @readonly */ this.piece = piece;
     /** @readonly */ this.localAxis = localAxis;
     /** @readonly */ this.localSide = localSide;
     /** @readonly */ this.normal = Vector3d.from(normal);
     /** @readonly */ this.center = Point3d.from(center);
     /** @readonly */ this.vertices = Object.freeze(vertices.map((v) => Point3d.from(v)));
+    /** @readonly */ this.holes = Object.freeze(holes.map((h) => Object.freeze(h.map((v) => Point3d.from(v)))));
     Object.freeze(this);
   }
 
-  get edges() { return Object.freeze(this.vertices.map((v, i) => new Line(v, this.vertices[(i + 1) % this.vertices.length]))); }
+  get edges() {
+    return Object.freeze([this.vertices, ...this.holes].flatMap((l) => l.map((v, i) => new Line(v, l[(i + 1) % l.length]))));
+  }
+  /** Su superficie: la del contorno menos la de sus agujeros. */
   get area() {
-    const [a, b, , d] = this.vertices;
-    return b.subtract(a).cross(d.subtract(a)).length;
+    /** @param {readonly Point3d[]} l */
+    const a = (l) => {
+      let x = 0, y = 0, z = 0;
+      for (let i = 0; i < l.length; i++) {
+        const p = l[i], q = l[(i + 1) % l.length];
+        x += p.y * q.z - p.z * q.y; y += p.z * q.x - p.x * q.z; z += p.x * q.y - p.y * q.x;
+      }
+      return Math.hypot(x, y, z) / 2;
+    };
+    return this.holes.reduce((s, h) => s - a(h), a(this.vertices));
   }
   /** @param {Transform} t */
   transform(t) {
     return new Face({
       piece: this.piece, localAxis: this.localAxis, localSide: this.localSide,
       normal: this.normal.transform(t), center: this.center.transform(t), vertices: this.vertices.map((v) => v.transform(t)),
+      holes: this.holes.map((h) => h.map((v) => v.transform(t))),
     });
   }
-  toString() { return `cara ${this.localSide > 0 ? '+' : '-'}${this.localAxis} de ${this.piece}, normal ${this.normal}`; }
+  toString() { return this.localAxis ? `cara ${this.localSide && this.localSide > 0 ? '+' : '-'}${this.localAxis} de ${this.piece}, normal ${this.normal}` : `cara de ${this.piece}, normal ${this.normal}`; }
 
   /** @param {{ print?: boolean }} [opts] */
   static help(opts) { return help('Face — una cara de una pieza', Face.members, opts); }
@@ -321,12 +336,13 @@ export class Face {
   /** @type {Member[]} */
   static members = [
     ['piece', 'el id de la pieza'],
-    ['localAxis  localSide', 'cuál cara es en la pieza: eje local y lado (+1 o -1)'],
+    ['localAxis  localSide', 'cuál cara es en la pieza: eje local y lado (+1 o -1); null si no mira hacia un eje'],
     ['normal', 'hacia dónde mira (Vector3d)'],
     ['center', 'su centro (Point3d)'],
-    ['vertices', 'sus 4 esquinas, en orden'],
-    ['edges', 'sus 4 aristas (Line)'],
-    ['area', 'su superficie, en unidades del documento al cuadrado'],
+    ['vertices', 'su contorno, en orden (4 esquinas en una caja)'],
+    ['holes', 'sus agujeros: un contorno por agujero (vacío en una caja)'],
+    ['edges', 'sus aristas (Line), las del contorno y las de los agujeros'],
+    ['area', 'su superficie sin los agujeros, en unidades del documento al cuadrado'],
     ['transform(t)', 'la cara transformada (devuelve una nueva)'],
     ['toString()', 'para leer'],
     ['help()', 'esta tabla'],
@@ -461,20 +477,36 @@ export class Transform {
  * `positions` son las coordenadas x, y, z de cada vértice, una detrás de otra; `indices`, de a
  * tres, los vértices de cada triángulo, en sentido antihorario visto desde afuera. Es un valor:
  * `transform(t)` devuelve otra.
+ *
+ * Opcional: `surfaces` dice a qué superficie pertenece cada triángulo (los de una misma cara
+ * comparten número) y `smooth[s]` si la superficie s aproxima una curva (un cilindro). De ahí
+ * salen las aristas y los vértices de verdad; si no vienen (una malla de un kernel), se deducen.
  */
 export class Mesh {
-  /** @param {{ positions: ArrayLike<number>, indices: ArrayLike<number> }} m */
-  constructor({ positions, indices }) {
+  /** @param {{ positions: ArrayLike<number>, indices: ArrayLike<number>, surfaces?: ArrayLike<number>, smooth?: ArrayLike<boolean> }} m */
+  constructor({ positions, indices, surfaces, smooth }) {
     const pos = Array.from(positions ?? []), idx = Array.from(indices ?? []);
     if (pos.length % 3 || pos.some((v) => typeof v !== 'number' || !Number.isFinite(v))) throw new TypeError('malla inválida: positions va de a tres números (x, y, z)');
     const n = pos.length / 3;
     if (idx.length % 3 || idx.some((i) => !Number.isInteger(i) || i < 0 || i >= n)) throw new TypeError(`malla inválida: indices va de a tres, cada uno entre 0 y ${n - 1}`);
     /** @readonly */ this.positions = Object.freeze(pos);
     /** @readonly */ this.indices = Object.freeze(idx);
+    /** @readonly @type {readonly number[] | null} */
+    this.surfaces = null;
+    /** @readonly @type {readonly boolean[] | null} */
+    this.smooth = null;
+    if (surfaces !== undefined && surfaces !== null) {
+      const sf = Array.from(surfaces);
+      if (sf.length !== idx.length / 3 || sf.some((v) => !Number.isInteger(v) || v < 0)) throw new TypeError('malla inválida: surfaces va un entero por triángulo');
+      const sm = Array.from(smooth ?? []).map(Boolean);
+      while (sm.length <= Math.max(-1, ...sf)) sm.push(false);
+      this.surfaces = Object.freeze(sf);
+      this.smooth = Object.freeze(sm);
+    }
     Object.freeze(this);
   }
 
-  /** Una Mesh a partir de cualquier { positions, indices } (lo que devuelve un kernel, p. ej.). @param {{ positions: ArrayLike<number>, indices: ArrayLike<number> }} m */
+  /** Una Mesh a partir de cualquier { positions, indices } (lo que devuelve un kernel, p. ej.). @param {{ positions: ArrayLike<number>, indices: ArrayLike<number>, surfaces?: ArrayLike<number>, smooth?: ArrayLike<boolean> }} m */
   static from(m) { return m instanceof Mesh ? m : new Mesh(m); }
 
   get vertexCount() { return this.positions.length / 3; }
@@ -501,7 +533,7 @@ export class Mesh {
     /** @type {number[]} */
     const pos = [];
     for (let k = 0; k < this.positions.length; k += 3) pos.push(...applyFrame(f, [this.positions[k], this.positions[k + 1], this.positions[k + 2]]));
-    return new Mesh({ positions: pos, indices: this.indices });
+    return new Mesh({ positions: pos, indices: this.indices, surfaces: this.surfaces ?? undefined, smooth: this.smooth ?? undefined });
   }
   toString() { return `Mesh: ${this.triangleCount} triángulos, volumen ${fmt(this.volume)}`; }
 
@@ -515,6 +547,8 @@ export class Mesh {
     ['new Mesh({ positions, indices })', 'una malla nueva'],
     ['positions', 'x, y, z de cada vértice, uno detrás de otro'],
     ['indices', 'de a tres: los vértices de cada triángulo, antihorario visto desde afuera'],
+    ['surfaces', 'a qué superficie pertenece cada triángulo, o null si no se sabe'],
+    ['smooth', 'por superficie: ¿aproxima una curva? (o null)'],
     ['static from(m)', 'una Mesh a partir de cualquier { positions, indices }'],
     ['vertexCount', 'cuántos vértices tiene'],
     ['triangleCount', 'cuántos triángulos tiene'],

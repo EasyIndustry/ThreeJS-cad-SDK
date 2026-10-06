@@ -7,10 +7,21 @@ en una app antes del release (ver `CONTRIBUTING.md`).
 
 ## [0.7.0] - sin publicar
 
-Responde a [#6](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/6): la pieza es su
-bruto más una lista de operaciones, y la forma que resulta es un cálculo.
+Responde a [#6](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/6) (la pieza es su
+bruto más una lista de operaciones, y la forma que resulta es un cálculo) y
+[#7](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/7) (formas reales: perfiles,
+torneados y su geometría).
 
 ### Breaking
+
+- **`shape` ahora se valida y se interpreta**: `{ kind: 'profile', axis, section, params? }` o
+  `{ kind: 'lathe', axis, contour }`. Las formas del formato viejo de la app (`profile`, `t`,
+  `rot`, `lathe`, `shaft`) se rechazan al crear la pieza; esa migración es de la app.
+- **`vertices`, `edges` y `faces` de una pieza con perfil, torneado u operaciones son los de su
+  forma real**, no los de su caja (un caño de 4 × 4 tiene 16 vértices). En una caja lisa no
+  cambia nada. `boundingBox`, `dims` y el bruto siguen siendo los de la caja.
+- `Face`: `localAxis` y `localSide` pueden ser null (una cara que no mira hacia un eje de la
+  pieza), suma `holes`, y `area` descuenta los agujeros.
 
 - **`toJSON()` escribe `version: 4`** (las piezas traen `operations`). Esta versión carga los
   documentos de antes; uno guardado con ella **no lo lee bien la 0.6.0**, que no sabía de
@@ -30,8 +41,15 @@ bruto más una lista de operaciones, y la forma que resulta es un cálculo.
   `pieza.local.solid` (en el marco de la pieza).
 - `Mesh`: una malla de triángulos como valor (`positions`, `indices`, `volume`, `boundingBox`,
   `transform`).
-- `createWorkshop({ kernel: { intersect, subtract } })`: lo que combina sólidos en 3D, para
-  varios cortes o agujeros. Sin operaciones o con un solo corte, el SDK la calcula solo.
+- `createWorkshop({ kernel: { intersect, subtract } })`: opcional, para dibujar con una malla
+  más limpia. Sin kernel, el SDK calcula la forma solo (la parte en convexos).
+- Perfiles y torneados: `SECTIONS` (`rect-tube`, `round-tube`, `round-bar`, `angle`, `channel`,
+  `tee`), `createWorkshop({ sections })` para las de la app, `pieza.setShape(shape)`.
+- Contacto y choque exactos, con la forma real: `{ exact: true }` en `touches`, `intersects`,
+  `contactsWith`, `intersectionsWith`, `taller.contacts` y `taller.collisions`. Un contacto contra
+  una superficie curva es la línea donde apoya.
+- `Mesh.surfaces` y `Mesh.smooth`: qué triángulos son la misma cara y cuáles aproximan una
+  curva; de ahí salen los vértices y las aristas reales.
 - La forma se cachea por lo que la define (medidas, forma del bruto, operaciones): mover no la
   recalcula, las instancias comparten la de su fuente y deshacer vuelve a encontrarla.
 

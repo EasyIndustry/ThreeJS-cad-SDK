@@ -224,6 +224,46 @@ createWorkshop({ units: 'in' }).tolerances;       // { touch: 0.0625, penetratio
 - Las ayudas visuales del adaptador de three (ejes, tubos de contacto, etiquetas) se escalan con la
   unidad.
 
+## Formas del bruto: perfiles y torneados
+
+Un bruto no tiene por qué ser una caja: puede ser un **perfil** (una sección extruida) o un
+**torneado** (un contorno que gira). La forma llena las medidas de la pieza, así que se estira con
+ella.
+
+```js
+taller.addPiece({ size: [100, 4, 4], shape: { kind: 'profile', axis: 0, section: 'rect-tube', params: { wall: 0.16 } } });
+taller.addPiece({ size: [4, 40, 4], shape: { kind: 'lathe', axis: 1, contour: [[1, 0], [1, 0.5], [0.5, 0.5], [0.5, 1]] } });
+pieza.setShape(null);   // vuelve a ser una caja
+```
+
+- **Perfil** `{ kind: 'profile', axis, section, params? }`: la sección llena los otros dos ejes y se
+  calcula con sus medidas, así que al estirar se estira y lo que es espesor (`wall`) se mantiene.
+  `params.turn` (0, 90, 180, 270) la gira. Las secciones genéricas están en `SECTIONS`:
+  `rect-tube`, `round-tube`, `round-bar`, `angle`, `channel` y `tee`.
+- **Secciones de la app:** `createWorkshop({ sections: { nombre: (params, ancho, alto) => ({ outer, holes }) } })`.
+  Una sección son contornos `{ points, smooth? }`, centrados; `smooth: true` dice que aproximan una
+  curva. El catálogo (nombres comerciales, medidas, íconos) queda en la app.
+- **Torneado** `{ kind: 'lathe', axis, contour }`: puntos `[r, y]` de 0 a 1 (del eje al borde, de
+  una punta a la otra), con `y` que no decrece.
+
+**Lo que se consulta es la forma real.** En una pieza con perfil, torneado u operaciones,
+`vertices`, `edges` y `faces` son los de su forma: un caño cuadrado de 4 × 4 tiene 16 vértices.
+Una arista sobre una superficie curva no se ofrece (no sirve para enganchar), y una cara plana
+trae sus agujeros (`face.holes`). La caja (`boundingBox`), `dims` y el despiece siguen siendo los
+del bruto.
+
+**Contacto exacto.** El contacto y el choque se calculan con la caja de cada pieza, que para una
+tabla es exacto. Con `{ exact: true }` se usa la forma real:
+
+```js
+barra.contactsWith(tabla, { exact: true });   // una línea, no una cara
+a.intersects(b, { exact: true });              // dos barras en L que solo encima sus cajas: false
+taller.contacts({ exact: true });
+```
+
+La forma real se arma con pedazos convexos (`src/convex.js`), así que el contacto exacto no
+necesita kernel. Un contacto contra una superficie curva es la línea donde apoya.
+
 ## Bruto y operaciones
 
 **Una pieza es su bruto** —lo que se compra y se corta: sus medidas, la forma de su bruto si no
@@ -251,17 +291,15 @@ p.removeOperation('O-2');   // vuelve exactamente a la forma de antes
   del documento.
 - **`dims`, la caja y el contacto son los del bruto.** Para despiezar, presupuestar o encastrar,
   manda lo que se compra.
-- **Lo que se resuelve en 2D lo calcula el SDK:** sin operaciones, la caja; con un solo corte, la
-  extrusión del contorno. **Combinar sólidos en 3D** (varios cortes, agujeros) lo hace un kernel
-  que pone la app, para que `src/` no dependa de ninguno:
+- **El SDK calcula la forma solo**, sin dependencias: la parte en pedazos convexos y arma la
+  malla con sus caras de afuera. Para dibujar con una malla más limpia se puede inyectar un
+  kernel (three-bvh-csg, manifold o el que sea), y `src/` sigue sin depender de ninguno:
 
   ```js
   const taller = createWorkshop({ kernel: { intersect(a, b) { … }, subtract(a, b) { … } } });
   ```
 
-  Recibe y devuelve mallas (`{ positions, indices }`) en el marco de la pieza: es el lugar donde
-  enchufar three-bvh-csg, manifold o el que sea. Sin kernel, pedir esa forma da un error que lo
-  dice.
+  Recibe y devuelve mallas (`{ positions, indices }`) en el marco de la pieza.
 - **La forma se cachea** mientras no cambie lo que la define (medidas, forma del bruto,
   operaciones): mover o renombrar la pieza no la recalcula, las instancias comparten la de su
   fuente y deshacer vuelve a encontrar la de antes.
@@ -420,16 +458,17 @@ política de compatibilidad hacia atrás y el proceso de release están en
 
 Dicho para que nadie lo dé por hecho:
 
-- **`vertices`, `edges` y `faces` son los del bruto como caja.** La forma que resulta de las
-  operaciones ya está (`solid`, una malla), pero sus vértices y aristas "de verdad" —los que
-  usaría un imán— y la forma de un bruto que no es caja (perfil, torneado: `shape`) llegan con
-  el #7. Hasta entonces, una pieza con `shape` la dibuja la app con `geometryFor`.
+- **Las curvas son polígonos.** Un círculo se aproxima con 32 lados (`CIRCLE_SIDES`), así que el
+  volumen de una barra redonda es el de un prisma de 32 lados, y un torneado es una pila de
+  troncos de 32 lados.
+- **Un torneado va de una punta a la otra:** su contorno no puede volver para atrás en `y` (no
+  hay socavados).
 - **Transformaciones rígidas solamente.** Escalar una pieza es cambiarle las medidas
   (`resize`), no una transformación; espejar va a necesitar saber de qué mano es cada
   forma. Las dos llegan como constructores nuevos de `Transform` cuando hagan falta.
-- **El contacto se calcula con la caja de la pieza.** Para una tabla es exacto; para una pata
-  torneada o un caño, es el contacto de su caja. Cuando las piezas tengan su geometría real,
-  el contacto la va a usar.
+- **El contacto, por defecto, es el de la caja de cada pieza** (rápido, y exacto para una tabla).
+  El de la forma real se pide con `{ exact: true }`. Un contacto de cara entre dos piezas partidas
+  en convexos puede salir en varios pedazos (uno por pedazo que apoya).
 - **No hay fijaciones, juntas de movimiento, vínculos ni recortes.** Son relaciones
   entre partes, y cada una va a entrar siguiendo la regla de arriba.
 

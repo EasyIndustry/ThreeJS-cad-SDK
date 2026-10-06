@@ -19,8 +19,8 @@
 // La forma y el material de cada pieza los decide la app, si quiere, con dos ganchos:
 //   geometryFor(piece) → BufferGeometry en el marco LOCAL de la pieza, centrada en su origen
 //   materialFor(piece) → Material
-// Por defecto: la forma que resulta de la pieza (su bruto con sus operaciones; sin
-// operaciones, una caja de sus medidas) y un gris neutro para todas, sea cual sea su
+// Por defecto: la forma que resulta de la pieza (su bruto —caja, perfil o torneado— con sus
+// operaciones) y un gris neutro para todas, sea cual sea su
 // `material`. Si la forma no se puede calcular (p. ej. hace falta un kernel que la app no
 // pasó), se dibuja la caja y el motivo queda en `mesh.geometry.userData.solidError`. El adaptador no conoce catálogos de materiales de ninguna app: eso es de
 // `materialFor`.
@@ -50,7 +50,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
   const col = { edge: '#3b2a1e', highlight: '#d6461f', contact: '#2e9a5c', collision: '#d6461f', ...colors };
   const caja = (/** @type {PieceDef} */ p) => new THREE.BoxGeometry(p.size[0], p.size[1], p.size[2]);
   const geo = geometryFor || ((/** @type {PieceDef} */ p) => {
-    if (!p.operations?.length) return caja(p);
+    if (!p.operations?.length && !p.shape) return caja(p);
     try {
       const m = workshop.part(p.id).local.solid;
       const g = new THREE.BufferGeometry();

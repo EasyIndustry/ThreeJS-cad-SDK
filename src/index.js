@@ -29,10 +29,14 @@ import { obbOf, satDepth, intersectBoxes, contactsOf, candidatePairs } from './c
 import { arrayTransforms } from './array.js';
 import { UNITS, convertLength } from './units.js';
 import { TOLERANCE_PRESETS, tolerancesFor } from './config.js';
-import { solidOf, checkKernel, OPERATION_KINDS } from './solid.js';
+import { solidOf, convexPartsOf, checkKernel, OPERATION_KINDS } from './solid.js';
+import { SECTIONS, checkShape, resolveSection } from './sections.js';
+import { featuresOf } from './features.js';
+import { transformConvex, depth as hondura, contacts as contactosConvexos, intersect as cruce, volume as volumen } from './convex.js';
+import { apply } from './frame.js';
 import { help } from './help.js';
 
-export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, Mesh, OPERATION_KINDS, arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, tolerancesFor };
+export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, Mesh, OPERATION_KINDS, SECTIONS, arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, tolerancesFor };
 
 /** @typedef {import('./model.js').Space} Space */
 /** @typedef {import('./geometry.js').PointLike} PointLike */
@@ -45,8 +49,13 @@ export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Interse
 /** @typedef {import('./solid.js').Kernel} Kernel */
 /** @typedef {import('./solid.js').OperationSpec} OperationSpec */
 /** @typedef {import('./solid.js').Operation} Operation */
+/** @typedef {import('./solid.js').Definition} Definition */
+/** @typedef {import('./sections.js').SectionFn} SectionFn */
+/** @typedef {import('./features.js').Features} Features */
+/** @typedef {import('./convex.js').Convex} Convex */
 
-/** @typedef {{ model: Model, part: (id: string) => Part, forget: (ids: string[]) => void, tolerances: () => Readonly<Tolerances>, solid: (id: string) => Mesh }} Ctx */
+/** @typedef {{ model: Model, part: (id: string) => Part, forget: (ids: string[]) => void, tolerances: () => Readonly<Tolerances>, checkSection: (shape: unknown, size?: [number, number, number]) => unknown,
+ *             solid: (id: string) => Mesh, features: (id: string) => Features, convex: (id: string) => Convex[], sections: Readonly<Record<string, SectionFn>> }} Ctx */
 /** El documento al que pertenece cada parte, sin colgárselo a la parte a la vista. @type {WeakMap<Part, Ctx>} */
 const ctxOf = new WeakMap();
 /** @param {Part} p */
@@ -59,30 +68,129 @@ const caraLocal = (f) => (f ? { localAxis: AX_NAME[f.axis], localSide: f.side } 
 /** @param {Model} m @param {string} id */
 const piezasDe = (m, id) => m.piecesOf(id).map((p) => p.id);
 
+/** Una pieza que es una caja lisa: sin forma de bruto y sin operaciones. @param {{ shape?: unknown, operations?: readonly unknown[] }} p */
+const esCaja = (p) => !p.shape && !p.operations?.length;
+
+/** Los pedazos convexos de una pieza, en el mundo. @param {Ctx} c @param {string} id */
+const convexosEnElMundo = (c, id) => c.convex(id).map((k) => transformConvex(k, c.model.worldFrame(id)));
+
+/** ¿Se cruzan las cajas de dos convexos, agrandadas por tol? @param {Convex} a @param {Convex} b @param {number} tol */
+function cajasSeCruzan(a, b, tol) {
+  for (let k = 0; k < 3; k++) {
+    let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+    for (const v of a.vertices) { a0 = Math.min(a0, v[k]); a1 = Math.max(a1, v[k]); }
+    for (const v of b.vertices) { b0 = Math.min(b0, v[k]); b1 = Math.max(b1, v[k]); }
+    if (a0 > b1 + tol || b0 > a1 + tol) return false;
+  }
+  return true;
+}
+
+/**
+ * La cara de la pieza (en su marco) que corresponde a un plano del mundo, si mira hacia uno de
+ * sus ejes. @param {Model} m @param {string} id @param {{ n: [number, number, number] } | null} pl
+ */
+function caraDePlano(m, id, pl) {
+  if (!pl) return null;
+  const r = m.worldFrame(id).r;
+  const n = [r[0] * pl.n[0] + r[3] * pl.n[1] + r[6] * pl.n[2], r[1] * pl.n[0] + r[4] * pl.n[1] + r[7] * pl.n[2], r[2] * pl.n[0] + r[5] * pl.n[1] + r[8] * pl.n[2]];
+  const k = n.findIndex((v) => Math.abs(v) > 1 - 1e-9);
+  return k < 0 ? null : { localAxis: AX_NAME[k], localSide: /** @type {1 | -1} */ (Math.sign(n[k])) };
+}
+
 /**
  * Los contactos entre las piezas de dos grupos (cada par una vez). Un par que se mete uno
- * en otro (más de `pen`) no cuenta como contacto: eso es una intersección.
- * @param {Model} m @param {string[]} as @param {string[]} bs @param {number} tol @param {number} pen
+ * en otro (más de `pen`) no cuenta como contacto: eso es una intersección. Con `exact`, cada
+ * pieza que no es una caja lisa se toma con su forma real (sus convexos).
+ * @param {Ctx} c @param {string[]} as @param {string[]} bs @param {number} tol @param {number} pen @param {boolean} [exact]
  */
-function contactos(m, as, bs, tol, pen) {
+function contactos(c, as, bs, tol, pen, exact = false) {
+  const m = c.model;
   /** @type {Contact[]} */
   const out = [];
   for (const [x, y] of candidatePairs(m, as, bs, tol)) {
+    if (exact && !(esCaja(m.piece(x)) && esCaja(m.piece(y)))) {
+      out.push(...contactosExactos(c, x, y, tol, pen));
+      continue;
+    }
     const A = obbOf(m, x), B = obbOf(m, y);
     const depth = satDepth(A, B);
     if (depth < -tol || depth > pen) continue;
-    for (const c of contactsOf(A, B, tol)) {
-      out.push(new Contact({ kind: c.kind, a: x, b: y, points: c.points, area: c.area, normal: c.normal, faceA: caraLocal(c.faceA), faceB: caraLocal(c.faceB) }));
+    for (const k of contactsOf(A, B, tol)) {
+      out.push(new Contact({ kind: k.kind, a: x, b: y, points: k.points, area: k.area, normal: k.normal, faceA: caraLocal(k.faceA), faceB: caraLocal(k.faceB) }));
     }
   }
   return Object.freeze(out);
 }
 
-/** Las intersecciones entre las piezas de dos grupos. @param {Model} m @param {string[]} as @param {string[]} bs @param {number} tol */
-function intersecciones(m, as, bs, tol) {
+/** @param {Ctx} c @param {string} x @param {string} y @param {number} tol @param {number} pen @returns {Contact[]} */
+function contactosExactos(c, x, y, tol, pen) {
+  const A = convexosEnElMundo(c, x), B = convexosEnElMundo(c, y);
+  /** @type {[Convex, Convex][]} */
+  const pares = [];
+  for (const a of A) for (const b of B) {
+    if (!cajasSeCruzan(a, b, tol)) continue;
+    const d = hondura(a, b);
+    if (d > pen) return []; // se meten: es una intersección, no un contacto
+    if (d >= -tol) pares.push([a, b]);
+  }
+  const todos = pares.flatMap(([a, b]) => contactosConvexos(a, b, tol));
+  // un pedazo vecino puede dar, sobre la misma junta, una arista o un punto que ya está en otro contacto
+  const caras = todos.filter((k) => k.kind === 'face');
+  const cerca = (/** @type {number[]} */ p, /** @type {number[]} */ q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) <= tol;
+  /** @type {typeof todos} */
+  const unicos = [];
+  for (const k of todos) {
+    if (k.kind !== 'face' && caras.some((f) => k.points.every((p) => f.points.some((q) => cerca(p, q)) || dentroDeCara(p, f.points, f.normal, tol)))) continue;
+    if (unicos.some((u) => u.kind === k.kind && u.points.length === k.points.length && u.points.every((p) => k.points.some((q) => cerca(p, q))))) continue;
+    unicos.push(k);
+  }
+  return unicos.map((k) => new Contact({
+    kind: k.kind, a: x, b: y, points: k.points, area: k.area, normal: k.normal,
+    faceA: caraDePlano(c.model, x, k.planeA), faceB: caraDePlano(c.model, y, k.planeB),
+  }));
+}
+
+/** ¿El punto cae sobre el polígono plano (a tol de su plano)? @param {number[]} p @param {number[][]} poly @param {number[]} n @param {number} tol */
+function dentroDeCara(p, poly, n, tol) {
+  const d = (p[0] - poly[0][0]) * n[0] + (p[1] - poly[0][1]) * n[1] + (p[2] - poly[0][2]) * n[2];
+  if (Math.abs(d) > tol) return false;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const e = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], w = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
+    const cx = [e[1] * w[2] - e[2] * w[1], e[2] * w[0] - e[0] * w[2], e[0] * w[1] - e[1] * w[0]];
+    if (cx[0] * n[0] + cx[1] * n[1] + cx[2] * n[2] < -tol * Math.hypot(...e)) return false;
+  }
+  return true;
+}
+
+/**
+ * Las intersecciones entre las piezas de dos grupos. Con `exact`, con la forma real.
+ * @param {Ctx} c @param {string[]} as @param {string[]} bs @param {number} tol @param {boolean} [exact]
+ */
+function intersecciones(c, as, bs, tol, exact = false) {
+  const m = c.model;
   /** @type {Intersection[]} */
   const out = [];
   for (const [x, y] of candidatePairs(m, as, bs, 0)) {
+    if (exact && !(esCaja(m.piece(x)) && esCaja(m.piece(y)))) {
+      const A = convexosEnElMundo(c, x), B = convexosEnElMundo(c, y);
+      let depth = -Infinity, volume = 0;
+      /** @type {number[][]} */ const vertices = [];
+      /** @type {number[][][]} */ const faces = [];
+      for (const a of A) for (const b of B) {
+        if (!cajasSeCruzan(a, b, 0)) continue;
+        const d = hondura(a, b);
+        if (d <= tol) continue;
+        const r = cruce(a, b);
+        if (!r) continue;
+        depth = Math.max(depth, d);
+        volume += volumen(r);
+        vertices.push(...r.vertices);
+        faces.push(...r.faces.map((f) => f.poly));
+      }
+      if (volume > 0) out.push(new Intersection({ a: x, b: y, volume, depth, vertices, faces }));
+      continue;
+    }
     const A = obbOf(m, x), B = obbOf(m, y);
     const depth = satDepth(A, B);
     if (depth <= tol) continue;
@@ -151,15 +259,47 @@ export class Part {
     });
   }
 
+  // Una pieza que es una caja lisa da los de su caja; una con perfil, torneado u operaciones,
+  // los de su forma real (los que salen de su malla): vértices donde se juntan tres caras o más,
+  // aristas rectas (las de una superficie curva no se ofrecen) y caras planas, con sus agujeros.
+
   /** @param {Space} s */
-  #vertices(s) { return Object.freeze(ctx(this).model.positions(this.id, s).map((v) => new Point3d(...v))); }
+  #vertices(s) {
+    const c = ctx(this), m = c.model, ps = m.piecesOf(this.id);
+    if (ps.every(esCaja)) return Object.freeze(m.positions(this.id, s).map((v) => new Point3d(...v)));
+    return Object.freeze(ps.flatMap((p) => {
+      const f = m.toSpace(p.id, s, this.id);
+      return (esCaja(p) ? m.cornersLocal(p) : c.features(p.id).vertices).map((v) => new Point3d(...apply(f, v)));
+    }));
+  }
   /** @param {Space} s */
-  #edges(s) { return Object.freeze(ctx(this).model.edges(this.id, s).map(([a, b]) => new Line(a, b))); }
+  #edges(s) {
+    const c = ctx(this), m = c.model, ps = m.piecesOf(this.id);
+    if (ps.every(esCaja)) return Object.freeze(m.edges(this.id, s).map(([a, b]) => new Line(a, b)));
+    return Object.freeze(ps.flatMap((p) => {
+      const f = m.toSpace(p.id, s, this.id);
+      return (esCaja(p) ? m.edges(p.id, 'local') : c.features(p.id).edges).map(([a, b]) => new Line(apply(f, a), apply(f, b)));
+    }));
+  }
   /** @param {Space} s */
   #faces(s) {
-    return Object.freeze(ctx(this).model.faces(this.id, s).map((f) => new Face({
-      piece: f.piece, localAxis: AXES[f.axis], localSide: f.side, normal: f.normal, center: f.center, vertices: f.corners,
-    })));
+    const c = ctx(this), m = c.model, ps = m.piecesOf(this.id);
+    /** @param {ReturnType<Model['faces']>[number]} f */
+    const deCaja = (f) => new Face({ piece: f.piece, localAxis: AXES[f.axis], localSide: f.side, normal: f.normal, center: f.center, vertices: f.corners });
+    if (ps.every(esCaja)) return Object.freeze(m.faces(this.id, s).map(deCaja));
+    return Object.freeze(ps.flatMap((p) => {
+      const t = new Transform(m.toSpace(p.id, s, this.id));
+      if (esCaja(p)) return m.faces(p.id, 'local').map(deCaja).map((f) => f.transform(t));
+      return c.features(p.id).faces.map((f) => {
+        const k = f.normal.findIndex((v) => Math.abs(v) > 1 - 1e-9);
+        const n = f.outer.length;
+        const center = /** @type {[number, number, number]} */ ([0, 1, 2].map((i) => f.outer.reduce((acc, v) => acc + v[i], 0) / n));
+        return new Face({
+          piece: p.id, localAxis: k < 0 ? null : AXES[k], localSide: k < 0 ? null : /** @type {1 | -1} */ (Math.sign(f.normal[k])),
+          normal: f.normal, center, vertices: f.outer, holes: f.holes,
+        }).transform(t);
+      });
+    }));
   }
   /** @param {Space} s */
   #box(s) { const b = ctx(this).model.box(this.id, s); return new BoundingBox(b.min, b.max); }
@@ -209,20 +349,22 @@ export class Part {
 
   // `tolerance`, si se pasa, va en la unidad del documento; si no, la del taller (`taller.tolerances`).
 
-  /** ¿Se toca con la otra (a `tolerance` o menos), sin meterse? @param {Part | string} other @param {{ tolerance?: number }} [opts] */
-  touches(other, { tolerance } = {}) { return this.contactsWith(other, { tolerance }).length > 0; }
-  /** ¿Se mete en la otra más de `tolerance`? @param {Part | string} other @param {{ tolerance?: number }} [opts] */
-  intersects(other, { tolerance } = {}) { return this.intersectionsWith(other, { tolerance }).length > 0; }
-  /** Dónde se toca con la otra. @param {Part | string} other @param {{ tolerance?: number }} [opts] */
-  contactsWith(other, { tolerance } = {}) {
-    const { model: m, tolerances } = ctx(this);
-    const t = tolerances();
-    return contactos(m, piezasDe(m, this.id), piezasDe(m, idDe(other)), tolerance ?? t.touch, t.penetration);
+  // `exact: true`: con la forma real de cada pieza (perfil, torneado, operaciones), no con su caja.
+
+  /** ¿Se toca con la otra (a `tolerance` o menos), sin meterse? @param {Part | string} other @param {{ tolerance?: number, exact?: boolean }} [opts] */
+  touches(other, { tolerance, exact } = {}) { return this.contactsWith(other, { tolerance, exact }).length > 0; }
+  /** ¿Se mete en la otra más de `tolerance`? @param {Part | string} other @param {{ tolerance?: number, exact?: boolean }} [opts] */
+  intersects(other, { tolerance, exact } = {}) { return this.intersectionsWith(other, { tolerance, exact }).length > 0; }
+  /** Dónde se toca con la otra. @param {Part | string} other @param {{ tolerance?: number, exact?: boolean }} [opts] */
+  contactsWith(other, { tolerance, exact = false } = {}) {
+    const c = ctx(this), m = c.model;
+    const t = c.tolerances();
+    return contactos(c, piezasDe(m, this.id), piezasDe(m, idDe(other)), tolerance ?? t.touch, t.penetration, exact);
   }
-  /** Lo que comparte de volumen con la otra. @param {Part | string} other @param {{ tolerance?: number }} [opts] */
-  intersectionsWith(other, { tolerance } = {}) {
-    const { model: m, tolerances } = ctx(this);
-    return intersecciones(m, piezasDe(m, this.id), piezasDe(m, idDe(other)), tolerance ?? tolerances().penetration);
+  /** Lo que comparte de volumen con la otra. @param {Part | string} other @param {{ tolerance?: number, exact?: boolean }} [opts] */
+  intersectionsWith(other, { tolerance, exact = false } = {}) {
+    const c = ctx(this), m = c.model;
+    return intersecciones(c, piezasDe(m, this.id), piezasDe(m, idDe(other)), tolerance ?? c.tolerances().penetration, exact);
   }
 
   toString() { return `${this.kind === 'piece' ? 'Piece' : 'Assembly'} ${this.id} «${this.name}»`; }
@@ -237,9 +379,9 @@ export class Part {
     ['instances', 'las instancias que se colocaron de ella'],
     ['placement', 'su colocación en el mundo (Transform)'],
     ['axes', 'sus ejes locales x, y, z vistos desde el mundo (Vector3d)'],
-    ['vertices', 'sus vértices en el mundo (Point3d). vertices[0].x se lee, no se escribe'],
-    ['edges', 'sus aristas en el mundo (Line)'],
-    ['faces', 'sus caras en el mundo (Face)'],
+    ['vertices', 'sus vértices en el mundo (Point3d), los de su forma real. vertices[0].x se lee, no se escribe'],
+    ['edges', 'sus aristas rectas en el mundo (Line); las de una superficie curva no se ofrecen'],
+    ['faces', 'sus caras planas en el mundo (Face), con sus agujeros'],
     ['boundingBox', 'la caja que la encierra, alineada al mundo'],
     ['local', 'lo mismo en su propio marco: local.vertices, local.edges, local.faces, local.boundingBox (y local.solid, en una pieza)'],
     ['transform(t)', 'aplicarle un Transform: el verbo del que salen los demás'],
@@ -249,10 +391,10 @@ export class Part {
     ['detach()', 'soltar una instancia: pasa a ser una parte de verdad, que ya no sigue a su fuente'],
     ['rename(name)', 'cambiarle el nombre'],
     ['remove()', 'borrarla, con todo lo que cuelga de ella'],
-    ['touches(other, { tolerance? })', '¿se toca con la otra sin meterse? (a tolerances.touch o menos)'],
-    ['intersects(other, { tolerance? })', '¿se mete en la otra? (más de tolerances.penetration)'],
-    ['contactsWith(other, { tolerance? })', 'dónde se toca con la otra (Contact). Con ella misma: sus uniones internas'],
-    ['intersectionsWith(other, { tolerance? })', 'lo que comparte de volumen con la otra (Intersection)'],
+    ['touches(other, { tolerance?, exact? })', '¿se toca con la otra sin meterse? (a tolerances.touch o menos). exact: con la forma real, no la caja'],
+    ['intersects(other, { tolerance?, exact? })', '¿se mete en la otra? (más de tolerances.penetration)'],
+    ['contactsWith(other, { tolerance?, exact? })', 'dónde se toca con la otra (Contact). Con ella misma: sus uniones internas'],
+    ['intersectionsWith(other, { tolerance?, exact? })', 'lo que comparte de volumen con la otra (Intersection)'],
     ['toString()', 'para leer'],
     ['help()', 'esta tabla'],
   ];
@@ -305,9 +447,20 @@ export class Piece extends Part {
   /** @returns {Mesh} */
   #solid() { return ctx(this).solid(this.id); }
   /** Cambiar sus medidas, en su marco local. No cambia cuál eje es el largo. Las operaciones se reaplican. @param {PointLike} size */
-  resize(size) { ctx(this).model.resize(this.id, vec3(size, 'medidas')); return this; }
+  resize(size) {
+    const c = ctx(this), v = vec3(size, 'medidas');
+    c.checkSection(c.model.piece(this.id).shape, v); // que la sección siga entrando
+    c.model.resize(this.id, v);
+    return this;
+  }
   /** @param {string} material */
   setMaterial(material) { ctx(this).model.setMaterial(this.id, material); return this; }
+  /**
+   * Cambia la forma del bruto: { kind: 'profile', axis, section, params? }, { kind: 'lathe',
+   * axis, contour } o null (una caja). Las medidas y las operaciones quedan.
+   * @param {unknown} shape
+   */
+  setShape(shape) { const c = ctx(this); c.model.setShape(this.id, c.checkSection(shape, c.model.piece(this.id).size)); return this; }
   /** Agrega una operación al final (ver OPERATION_KINDS). Su id queda en `operations`. @param {OperationSpec} op */
   addOperation(op) { ctx(this).model.addOperation(this.id, op); return this; }
   /** Reemplaza una operación, en su lugar. @param {string} id @param {OperationSpec} op */
@@ -326,12 +479,13 @@ export class Piece extends Part {
     ['dims', '{ length, width, thickness }: largo, ancho y espesor — gire como gire'],
     ['directions', 'hacia dónde corren su largo, ancho y espesor en el mundo (Vector3d)'],
     ['material', 'su material'],
-    ['shape', 'la forma de su bruto (perfil, torneado), o null si es una caja'],
+    ['shape', "la forma de su bruto: { kind: 'profile', axis, section, params? }, { kind: 'lathe', axis, contour } o null (una caja)"],
     ['stock', 'su bruto, lo que se compra: { size, shape }; las operaciones no lo cambian'],
     ['operations', "lo que se le hace al bruto, en orden: { id, kind: 'cut' | 'hole', … }"],
     ['solid', 'la forma que resulta (Mesh), en el mundo: se calcula, no se guarda'],
     ['resize(size)', 'cambiar sus medidas en su marco local; las operaciones se reaplican'],
     ['setMaterial(m)', 'cambiarle el material'],
+    ['setShape(shape)', 'cambiarle la forma del bruto (perfil, torneado; null: una caja)'],
     ['addOperation(op)', "agregar una operación: { kind: 'cut', axis, outline } o { kind: 'hole', axis, side, at, diameter, depth? }"],
     ['updateOperation(id, op)', 'reemplazar una operación, en su lugar'],
     ['removeOperation(id)', 'sacar una operación: la forma vuelve a la de antes'],
@@ -376,23 +530,55 @@ export class Assembly extends Part {
  * del documento: se guarda con él, y un documento cargado trae la suya.
  * `tolerances`: pisa las tolerancias que sugiere config.js para esa unidad, en esa unidad.
  * `historyLimit`: cuántos pasos se pueden deshacer (100 si no se dice; 0: sin historial).
- * `kernel`: lo que combina sólidos en 3D ({ intersect, subtract }, sobre mallas), para la forma
- * de las piezas con más de un corte o con agujeros. Lo pone la app (three-bvh-csg, manifold…).
+ * `kernel`: lo que combina sólidos en 3D ({ intersect, subtract }, sobre mallas), para dibujar
+ * piezas con varias operaciones con una malla limpia. Lo pone la app (three-bvh-csg, manifold…);
+ * sin él, el SDK la arma de la forma partida en convexos.
+ * `sections`: secciones de perfil propias de la app, `{ nombre: (params, ancho, alto) => sección }`,
+ * además de las genéricas de SECTIONS.
  * También se puede pasar un `Model` ya armado en lugar de las opciones.
- * @param {Model | { units?: Unit, tolerances?: Partial<Tolerances>, historyLimit?: number, kernel?: Kernel }} [init]
+ * @param {Model | { units?: Unit, tolerances?: Partial<Tolerances>, historyLimit?: number, kernel?: Kernel, sections?: Record<string, SectionFn> }} [init]
  */
 export function createWorkshop(init = {}) {
   const model = init instanceof Model ? init : new Model({ units: init.units, historyLimit: init.historyLimit });
   const override = init instanceof Model ? {} : init.tolerances ?? {};
   const kernel = init instanceof Model || init.kernel === undefined ? null : checkKernel(init.kernel);
+  const propias = init instanceof Model ? {} : init.sections ?? {};
+  for (const [k, f] of Object.entries(propias)) if (typeof f !== 'function') throw new TypeError(`sección ${k} inválida: va una función (params, ancho, alto) => { outer, holes? }`);
+  /** @type {Readonly<Record<string, SectionFn>>} */
+  const sections = Object.freeze({ ...SECTIONS, ...propias });
   /**
-   * La forma de cada pieza, mientras no cambie lo que la define: sus medidas, la forma de su
-   * bruto y sus operaciones. Lo guardado es inmutable y esas partes se comparten entre un
-   * registro y el que lo reemplaza, así que mover o renombrar no la recalcula, y deshacer
-   * vuelve a encontrar la de antes.
-   * @type {WeakMap<object, WeakMap<object, WeakMap<object, Mesh>>>}
+   * Lo que se deriva de la forma de cada pieza (su malla, sus rasgos, sus convexos), mientras no
+   * cambie lo que la define: sus medidas, la forma de su bruto y sus operaciones. Lo guardado es
+   * inmutable y esas partes se comparten entre un registro y el que lo reemplaza, así que mover
+   * o renombrar no lo recalcula, y deshacer vuelve a encontrar lo de antes.
+   * @type {{ solid: WeakMap<object, any>, features: WeakMap<object, any>, convex: WeakMap<object, any> }}
    */
-  const formas = new WeakMap();
+  const formas = { solid: new WeakMap(), features: new WeakMap(), convex: new WeakMap() };
+  /**
+   * @template T @param {keyof typeof formas} que @param {Definition} def @param {() => T} calcular @returns {T}
+   */
+  const porDefinicion = (que, def, calcular) => {
+    const claves = [def.size, def.shape ?? SIN_FORMA, def.operations ?? SIN_OPERACIONES];
+    /** @type {WeakMap<object, any>} */
+    let nivel = formas[que];
+    for (const k of claves.slice(0, -1)) {
+      if (!nivel.has(k)) nivel.set(k, new WeakMap());
+      nivel = nivel.get(k);
+    }
+    const ultima = claves[claves.length - 1];
+    if (!nivel.has(ultima)) nivel.set(ultima, calcular());
+    return nivel.get(ultima);
+  };
+  /**
+   * Revisa la forma de un bruto y, si es un perfil, que su sección exista y se pueda armar con
+   * esas medidas (una pared más gruesa que la mitad del lado falla acá, no al dibujar).
+   * @param {unknown} shape @param {[number, number, number]} [size]
+   */
+  const checkSection = (shape, size) => {
+    const sh = checkShape(shape);
+    if (sh?.kind === 'profile' && size) resolveSection(sh, size, sections);
+    return sh;
+  };
   tolerancesFor(model.units, override); // que un valor inválido falle al crear, no en la primera pregunta
   /** @type {Map<string, Part>} */
   const cache = new Map();
@@ -400,22 +586,19 @@ export function createWorkshop(init = {}) {
   const c = {
     model,
     tolerances: () => tolerancesFor(model.units, override),
+    sections,
+    checkSection,
     solid(id) {
       const def = model.definition(id);
-      const claves = [def.size, def.shape ?? SIN_FORMA, def.operations ?? SIN_OPERACIONES];
-      /** @type {WeakMap<object, any>} */
-      let nivel = formas;
-      for (const k of claves.slice(0, -1)) {
-        if (!nivel.has(k)) nivel.set(k, new WeakMap());
-        nivel = nivel.get(k);
-      }
-      const ultima = claves[claves.length - 1];
-      let m = nivel.get(ultima);
-      if (!m) {
-        m = solidOf(def, kernel);
-        nivel.set(ultima, m);
-      }
-      return m;
+      return porDefinicion('solid', def, () => solidOf(def, { kernel, sections }));
+    },
+    features(id) {
+      const def = model.definition(id);
+      return porDefinicion('features', def, () => featuresOf(c.solid(id)));
+    },
+    convex(id) {
+      const def = model.definition(id);
+      return porDefinicion('convex', def, () => convexPartsOf(def, sections));
     },
     part(id) {
       const kind = model.get(id).kind; // que falle acá, con un mensaje claro, si no existe
@@ -463,7 +646,7 @@ export function createWorkshop(init = {}) {
      */
     addPiece({ name, size, material, shape, center = [0, 0, 0], placement, axes }) {
       const id = model.addPiece({
-        name, size: vec3(size, 'medidas'), material, shape, at: vec3(center, 'centro'),
+        name, size: vec3(size, 'medidas'), material, shape: checkSection(shape, vec3(size, 'medidas')), at: vec3(center, 'centro'),
         r: placement ? Transform.check(placement).frame.r : undefined,
         axes,
       });
@@ -496,16 +679,16 @@ export function createWorkshop(init = {}) {
     get units() { return model.units; },
     /** Las tolerancias en uso, en la unidad del documento: las sugeridas para ella (config.js) y lo que se haya pisado. */
     get tolerances() { return c.tolerances(); },
-    /** Todos los contactos entre piezas del documento. @param {{ tolerance?: number }} [opts] */
-    contacts({ tolerance } = {}) {
+    /** Todos los contactos entre piezas del documento. @param {{ tolerance?: number, exact?: boolean }} [opts] */
+    contacts({ tolerance, exact = false } = {}) {
       const ps = model.allPieces().map((p) => p.id);
       const t = c.tolerances();
-      return contactos(model, ps, ps, tolerance ?? t.touch, t.penetration);
+      return contactos(c, ps, ps, tolerance ?? t.touch, t.penetration, exact);
     },
-    /** Todas las piezas que se meten unas en otras. @param {{ tolerance?: number }} [opts] */
-    collisions({ tolerance } = {}) {
+    /** Todas las piezas que se meten unas en otras. @param {{ tolerance?: number, exact?: boolean }} [opts] */
+    collisions({ tolerance, exact = false } = {}) {
       const ps = model.allPieces().map((p) => p.id);
-      return intersecciones(model, ps, ps, tolerance ?? c.tolerances().penetration);
+      return intersecciones(c, ps, ps, tolerance ?? c.tolerances().penetration, exact);
     },
     tree() { return model.tree(); },
     /** @param {(ev: { type: string, ids: string[] }) => void} fn */
@@ -550,8 +733,8 @@ export const WORKSHOP_MEMBERS = [
   ['roots', 'las partes de primer nivel (las que no están en un ensamble)'],
   ['units', "la unidad de todas las medidas del documento: 'mm', 'cm', 'm', 'in' o 'ft'"],
   ['tolerances', 'las tolerancias en uso, en esa unidad: { touch, penetration } (ver config.js)'],
-  ['contacts({ tolerance? })', 'todos los contactos entre piezas (Contact)'],
-  ['collisions({ tolerance? })', 'todas las piezas que se meten unas en otras (Intersection)'],
+  ['contacts({ tolerance?, exact? })', 'todos los contactos entre piezas (Contact); exact: con la forma real'],
+  ['collisions({ tolerance?, exact? })', 'todas las piezas que se meten unas en otras (Intersection)'],
   ['tree()', 'el árbol de partes, como texto'],
   ['on(fn)', "enterarse de cada cambio ({ type, ids }); deshacer avisa con 'undo' y 'redo', y cancelar con 'rollback'; devuelve cómo desuscribirse"],
   ['undo()', 'volver al documento de antes del último paso; false si no había nada'],

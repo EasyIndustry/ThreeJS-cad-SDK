@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createWorkshop, Part, Piece, Assembly, Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, WORKSHOP_MEMBERS,
-  arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, tolerancesFor, Mesh, OPERATION_KINDS,
+  arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, tolerancesFor, Mesh, OPERATION_KINDS, SECTIONS,
 } from '../src/index.js';
 import * as sdk from '../src/index.js';
 import { Model } from '../src/model.js';
@@ -41,7 +41,7 @@ const larguero = (t, center = [0, 0, 0]) => t.addPiece({ name: 'Larguero', size:
 
 test('bug 1: girar un ensamble de largueros NO reescribe sus formas ni sus medidas', () => {
   const t = createWorkshop();
-  const perfil = { kind: 'profile', profile: 'tubo-cuadrado', axis: 0, t: 0.16, rot: 0 };
+  const perfil = { kind: 'profile', axis: 0, section: 'rect-tube', params: { wall: 0.16 } };
   const a = t.addPiece({ name: 'Caño', size: [200, 4, 4], shape: perfil, center: [0, 2, 0] });
   const b = t.addPiece({ name: 'Caño', size: [200, 4, 4], shape: perfil, center: [0, 2, 40] });
   const definicion = (p) => JSON.stringify([p.size, p.shape, p.dims, p.material]);
@@ -292,11 +292,11 @@ for (const [cls, members, campos] of [
   [Vector3d, Vector3d.members, ['x', 'y', 'z']],
   [Line, Line.members, ['from', 'to']],
   [BoundingBox, BoundingBox.members, ['min', 'max']],
-  [Face, Face.members, ['piece', 'localAxis', 'localSide', 'normal', 'center', 'vertices']],
+  [Face, Face.members, ['piece', 'localAxis', 'localSide', 'normal', 'center', 'vertices', 'holes']],
   [Transform, Transform.members, ['frame']],
   [Contact, Contact.members, ['kind', 'a', 'b', 'points', 'area', 'normal', 'faceA', 'faceB']],
   [Intersection, Intersection.members, ['a', 'b', 'volume', 'depth', 'vertices', 'faces']],
-  [Mesh, Mesh.members, ['positions', 'indices']],
+  [Mesh, Mesh.members, ['positions', 'indices', 'surfaces', 'smooth']],
   [Piece, [...Piece.members, ...Part.members], ['id']],
   [Assembly, [...Assembly.members, ...Part.members], ['id']],
 ]) {
@@ -1198,14 +1198,16 @@ const kernelDePrueba = () => {
   return { llamadas, kernel: { intersect: anota('intersect'), subtract: anota('subtract') } };
 };
 
-test('las operaciones no cambian el bruto: ni las medidas, ni dims, ni la caja, ni el contacto', () => {
+test('las operaciones no cambian el bruto: ni las medidas, ni dims, ni la caja; los vértices sí son los de la forma real', () => {
   const t = createWorkshop();
   const p = t.addPiece({ size: [60, 4.5, 4.5], center: [0, 2.25, 0] });
-  const antes = { dims: p.dims, caja: pts(p.vertices), stock: JSON.stringify(p.stock) };
+  const antes = { dims: p.dims, caja: p.boundingBox.toString(), stock: JSON.stringify(p.stock) };
   p.addOperation({ kind: 'cut', axis: 2, outline: TRAPECIO });
   assert.deepEqual(p.dims, antes.dims);
-  assert.deepEqual(pts(p.vertices), antes.caja);
+  assert.equal(p.boundingBox.toString(), antes.caja);
   assert.equal(JSON.stringify(p.stock), antes.stock);
+  assert.equal(p.vertices.length, 8, 'el trapecio extruido tiene 8 vértices');
+  assert.ok(p.vertices.some((v) => Math.abs(v.y - 2.25) < 1e-9 && Math.abs(v.x - 30) < 1e-9), 'uno a media altura, donde el contorno baja');
   assert.deepEqual(p.operations.map((o) => [o.id, o.kind]), [['O-1', 'cut']]);
   assert.ok(Object.isFrozen(p.operations) && Object.isFrozen(p.operations[0]));
   assert.deepEqual(OPERATION_KINDS, ['cut', 'hole']);
@@ -1273,14 +1275,17 @@ test('la forma en el mundo es la local, colocada: con la pieza girada, igual que
   cerca([...b.min.toArray(), ...b.max.toArray()], [...c.min.toArray(), ...c.max.toArray()], 1e-9);
 });
 
-test('varios cortes o agujeros combinan sólidos en 3D: sin kernel, un error que dice cómo pasarlo', () => {
+test('varios cortes o agujeros, sin kernel: el SDK combina los sólidos solo (partidos en convexos)', () => {
   const t = createWorkshop();
-  const p = t.addPiece({ size: [60, 4, 5] })
-    .addOperation({ kind: 'cut', axis: 2, outline: TRAPECIO })
-    .addOperation({ kind: 'cut', axis: 0, outline: TRAPECIO });
-  assert.throws(() => p.local.solid, /hace falta un kernel: createWorkshop\(\{ kernel/);
-  const q = t.addPiece({ size: [60, 4, 5] }).addOperation({ kind: 'hole', axis: 0, side: 1, at: [0.5, 0.5], diameter: 1 });
-  assert.throws(() => q.solid, /kernel/);
+  const MITAD = [[0, 0], [0.5, 0], [0.5, 1], [0, 1]];
+  const p = t.addPiece({ size: [10, 10, 4] })
+    .addOperation({ kind: 'cut', axis: 2, outline: MITAD })
+    .addOperation({ kind: 'cut', axis: 0, outline: MITAD });
+  cerca([p.local.solid.volume], [100], 1e-9, 'la mitad de la mitad');
+  const q = t.addPiece({ size: [10, 10, 4] }).addOperation({ kind: 'hole', axis: 2, side: 1, at: [0.5, 0.5], diameter: 1 });
+  const poligono = 16 * 0.25 * Math.sin((2 * Math.PI) / 32);   // el círculo es un polígono de 32 lados
+  cerca([q.local.solid.volume], [400 - 4 * poligono], 1e-9);
+  assert.equal(q.faces.filter((f) => f.holes.length).length, 2, 'las dos caras por donde pasa tienen su agujero');
   assert.throws(() => createWorkshop({ kernel: {} }), /kernel inválido/);
 });
 
@@ -1376,11 +1381,149 @@ test('Mesh: un valor, con su volumen, su caja y transform', () => {
   assert.throws(() => new Mesh({ positions: [0, 0, 0], indices: [0, 0, 1] }), /entre 0 y 0/);
 });
 
+// ---------- formas reales: perfiles y torneados ----------
+
+const CANO = { kind: 'profile', axis: 0, section: 'rect-tube', params: { wall: 0.16 } };
+const BARRA = (axis) => ({ kind: 'profile', axis, section: 'round-bar' });
+const LADOS = 32;
+const poligono = (r) => (LADOS / 2) * r * r * Math.sin((2 * Math.PI) / LADOS); // el círculo es un polígono
+
+test('un caño cuadrado de 4 × 4 con pared 0,16 tiene 16 vértices: 8 por tapa, 4 por fuera y 4 por dentro', () => {
+  const t = createWorkshop();
+  const c = t.addPiece({ size: [100, 4, 4], shape: CANO });
+  assert.equal(c.vertices.length, 16);
+  assert.equal(c.edges.length, 24, '8 por tapa y 8 a lo largo');
+  const tapas = c.local.faces.filter((f) => f.localAxis === 'x');
+  assert.equal(tapas.length, 2);
+  for (const f of tapas) {
+    assert.equal(f.holes.length, 1, 'la tapa tiene el agujero del caño');
+    cerca([f.area], [16 - 3.68 * 3.68], 1e-9);
+  }
+  cerca([c.local.solid.volume], [100 * (16 - 3.68 * 3.68)], 1e-9);
+  assert.deepEqual(c.dims, { length: 100, width: 4, thickness: 4 }, 'el bruto manda');
+});
+
+test('una barra redonda no ofrece aristas ni vértices en su superficie curva', () => {
+  const t = createWorkshop();
+  const b = t.addPiece({ size: [50, 4, 4], shape: BARRA(0) });
+  assert.equal(b.vertices.length, 0);
+  assert.equal(b.edges.length, 0);
+  assert.equal(b.faces.length, 2, 'solo las dos tapas son caras planas');
+  cerca([b.local.solid.volume], [50 * poligono(2)], 1e-9);
+});
+
+test('una barra redonda apoyada sobre una tabla toca en una línea, no en una cara', () => {
+  const t = createWorkshop();
+  const tabla = t.addPiece({ size: [60, 2, 40], center: [0, 1, 0] });
+  const barra = t.addPiece({ size: [50, 4, 4], shape: BARRA(0), center: [0, 4, 0] });
+  const [caja] = barra.contactsWith(tabla);
+  assert.equal(caja.kind, 'face', 'con su caja, apoya una cara');
+  const exactos = barra.contactsWith(tabla, { exact: true });
+  assert.equal(exactos.length, 1);
+  assert.equal(exactos[0].kind, 'edge', 'con su forma real, una línea');
+  cerca([exactos[0].line.length], [50], 1e-9, 'a todo lo largo de la barra');
+  barra.rotate(360 / 64, 'x'); // medio lado del polígono: ahora apoya un lado plano del polígono, y sigue siendo una línea
+  barra.move([0, -barra.boundingBox.min.y + 2, 0]);
+  const girada = barra.contactsWith(tabla, { exact: true });
+  assert.deepEqual(girada.map((c) => c.kind), ['edge']);
+  assert.ok(barra.touches(tabla, { exact: true }));
+});
+
+test('dos barras redondas en L: las cajas se encima en la esquina, los cilindros no; con la forma real no chocan', () => {
+  const t = createWorkshop();
+  const a = t.addPiece({ size: [10, 2, 2], shape: BARRA(0) });                       // a lo largo de x
+  const b = t.addPiece({ size: [2, 2, 10], shape: BARRA(2), center: [4.5, 1.5, 5.9] }); // a lo largo de z, más arriba
+  assert.ok(a.intersects(b, { tolerance: 0 }), 'las cajas se meten una en otra');
+  assert.ok(!a.intersects(b, { exact: true, tolerance: 0 }), 'los cilindros, no');
+  assert.equal(t.collisions({ exact: true, tolerance: 0 }).length, 0);
+});
+
+test('con la forma real, el choque es el volumen de verdad que comparten', () => {
+  const t = createWorkshop();
+  const tabla = t.addPiece({ size: [60, 2, 40], center: [0, 1, 0] });
+  const barra = t.addPiece({ size: [4, 4, 30], shape: BARRA(2), center: [0, 2, 0] }); // hundida hasta su eje en la tabla
+  const [i] = barra.intersectionsWith(tabla, { exact: true });
+  cerca([i.volume], [30 * poligono(2) / 2], 1e-6, 'media barra (por debajo de su eje) está adentro de la tabla');
+  cerca([i.depth], [2], 1e-6);
+});
+
+test('un caño apoyado sobre una tabla: el contacto es la cara de abajo del caño, entera', () => {
+  const t = createWorkshop();
+  const tabla = t.addPiece({ size: [200, 2, 40], center: [0, 1, 0] });
+  const cano = t.addPiece({ size: [100, 4, 4], shape: CANO, center: [0, 4, 0] });
+  const cs = cano.contactsWith(tabla, { exact: true });
+  assert.deepEqual(cs.map((c) => c.kind), ['face']);
+  cerca([cs[0].area], [100 * 4], 1e-9);
+  const delCano = cs[0].a === cano.id ? cs[0].faceA : cs[0].faceB;
+  assert.deepEqual(delCano, { localAxis: 'y', localSide: -1 }, 'la cara -y del caño');
+});
+
+test('rotar el ensamble que contiene un perfil no cambia su geometría local', () => {
+  const t = createWorkshop();
+  const c = t.addPiece({ size: [100, 4, 4], shape: CANO });
+  const otro = t.addPiece({ size: [10, 10, 10], center: [0, 20, 0] });
+  const local = () => [pts(c.local.vertices), JSON.stringify(c.local.solid.positions)];
+  const antes = local();
+  const e = t.assemble([c, otro]);
+  e.rotate(37, 'y').rotate(90, 'x');
+  assert.deepEqual(local(), antes);
+});
+
+test('un torneado: el contorno gira alrededor de su eje y se estira con la pieza', () => {
+  const t = createWorkshop();
+  const pata = t.addPiece({ size: [4, 40, 4], shape: { kind: 'lathe', axis: 1, contour: [[1, 0], [1, 0.5], [0.5, 0.5], [0.5, 1]] } });
+  cerca([pata.local.solid.volume], [20 * poligono(2) + 20 * poligono(1)], 1e-9, 'un cilindro de radio 2 y uno de radio 1');
+  assert.equal(pata.faces.length, 3, 'abajo, el escalón (un anillo) y arriba');
+  const escalon = pata.local.faces.find((f) => f.holes.length === 1);
+  cerca([escalon.area], [poligono(2) - poligono(1)], 1e-9);
+  assert.equal(pata.vertices.length, 0);
+  pata.resize([4, 80, 4]);
+  cerca([pata.local.solid.volume], [40 * poligono(2) + 40 * poligono(1)], 1e-9);
+});
+
+test('secciones: girar una sección, la de la app y los errores claros', () => {
+  const t = createWorkshop({ sections: { 'mi-perfil': (_p, w, h) => ({ outer: { points: [[-w / 2, -h / 2], [w / 2, -h / 2], [0, h / 2]] } }) } });
+  const ang = t.addPiece({ size: [20, 4, 4], shape: { kind: 'profile', axis: 0, section: 'angle', params: { wall: 0.5 } } });
+  cerca([ang.local.solid.volume], [20 * (4 * 0.5 + 3.5 * 0.5)], 1e-9);
+  const girado = t.addPiece({ size: [20, 4, 4], shape: { kind: 'profile', axis: 0, section: 'angle', params: { wall: 0.5, turn: 180 } } });
+  assert.ok(girado.local.solid.boundingBox.max.y > 1.9 && girado.local.vertices.some((v) => v.y === 2 && v.z === 2), 'girado 180°: las alas quedan arriba y a la derecha');
+  const prisma = t.addPiece({ size: [10, 6, 4], shape: { kind: 'profile', axis: 2, section: 'mi-perfil' } });
+  cerca([prisma.local.solid.volume], [0.5 * 10 * 6 * 4], 1e-9, 'la sección de la app: un triángulo');
+  assert.deepEqual(Object.keys(SECTIONS), ['rect-tube', 'round-tube', 'round-bar', 'angle', 'channel', 'tee']);
+  assert.throws(() => t.addPiece({ size: [10, 4, 4], shape: { kind: 'profile', axis: 0, section: 'caño-40x40' } }), /sección desconocida: caño-40x40/);
+  assert.throws(() => t.addPiece({ size: [10, 4, 4], shape: { kind: 'profile', axis: 0, section: 'rect-tube', params: { wall: 3 } } }), /pared inválida/);
+  assert.throws(() => t.addPiece({ size: [10, 4, 4], shape: { kind: 'sphere' } }), /forma desconocida/);
+  assert.throws(() => t.addPiece({ size: [10, 4, 4], shape: { kind: 'lathe', axis: 0, contour: [[1, 1], [1, 0]] } }), /y no puede decrecer/);
+  const c = t.addPiece({ size: [100, 4, 4], shape: CANO });
+  assert.throws(() => c.resize([100, 0.3, 4]), /pared inválida/, 'achicarla hasta que la pared no entra');
+  assert.throws(() => createWorkshop({ sections: { mala: 42 } }), /sección mala inválida/);
+});
+
+test('cambiar la forma del bruto: setShape, y se deshace', () => {
+  const t = createWorkshop();
+  const p = t.addPiece({ size: [100, 4, 4] });
+  p.setShape(CANO);
+  assert.equal(p.vertices.length, 16);
+  t.undo();
+  assert.equal(p.shape, null);
+  assert.equal(p.vertices.length, 8);
+  t.redo();
+  assert.deepEqual(p.shape, CANO);
+});
+
+test('la malla de una forma sabe sus superficies, y las curvas están marcadas', () => {
+  const t = createWorkshop();
+  const b = t.addPiece({ size: [4, 4, 50], shape: BARRA(2) });
+  const m = b.local.solid;
+  assert.ok(m.surfaces && m.smooth);
+  assert.equal(m.smooth.filter(Boolean).length, 1, 'el costado de la barra es una sola superficie curva');
+});
+
 // ---------- que el SDK siga siendo puro ----------
 
 test('el SDK no depende de ningún paquete externo ni del navegador (lo puede usar el servidor)', async () => {
   const { readFile } = await import('node:fs/promises');
-  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/units.js', 'src/config.js', 'src/solid.js', 'src/index.js', 'examples/demo.js']) {
+  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/units.js', 'src/config.js', 'src/solid.js', 'src/polygon.js', 'src/convex.js', 'src/sections.js', 'src/features.js', 'src/index.js', 'examples/demo.js']) {
     const src = await readFile(new URL(`../${f}`, import.meta.url), 'utf8');
     const sin = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
     const ext = [...sin.matchAll(/^\s*(?:import|export)[^'"]*?from\s*['"]([^'"]+)['"]/gm)]
