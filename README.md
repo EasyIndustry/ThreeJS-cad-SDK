@@ -264,6 +264,31 @@ taller.contacts({ exact: true });
 La forma real se arma con pedazos convexos (`src/convex.js`), así que el contacto exacto no
 necesita kernel. Un contacto contra una superficie curva es la línea donde apoya.
 
+## Estirar un conjunto
+
+Como el STRETCH de los CAD: se corta el conjunto con un plano, lo que lo cruza se estira, lo que
+está del lado que se arrastra se mueve y lo del otro lado se queda.
+
+```js
+mesa.stretchPlanes('x');                                   // [{ plane, gap }]: el hueco más ancho primero
+const plan = mesa.stretchPlan({ axis: 'x', side: 1, delta: 20, locked: patas });   // previsualizar
+plan.pieces;          // [{ part, action: 'stretch' | 'move' | 'stay', axis?, reason? }]
+plan.min;             // hasta dónde se puede achicar; plan.limited si se pidió más
+mesa.stretch({ axis: 'x', side: 1, delta: 20 });           // hacerlo, en un solo paso de deshacer
+```
+
+- **En el marco del ensamble:** `axis` y `plane` son del ensamble, así que la misma mesa girada
+  se estira igual.
+- **Planos de corte:** el medio de cada hueco entre bordes, el más ancho primero (entre patas,
+  entre estantes) y, si empatan, el más centrado. Si no se da `plane`, se usa el primero.
+- **Lo que no se estira** —lo `locked` (patas torneadas, perfiles, frentes), las instancias y una
+  pieza que cruza el plano **en diagonal**— se mueve entero con el lado donde está su centro; el
+  plan dice por qué (`reason`).
+- **El límite al achicar:** ninguna pieza estirada queda más corta que `minLength`
+  (`taller.tolerances.minLength`: 10 mm, o 3/8 in) y lo que se mueve no pasa a lo que se queda.
+- Una pieza estirada cambia su medida a lo largo del eje; sus operaciones, que van normalizadas,
+  se reaplican.
+
 ## Colocación
 
 Lo que hace cómodo armar a mano. Son funciones que **proponen**: devuelven una traslación (y qué

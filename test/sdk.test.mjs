@@ -900,12 +900,12 @@ const POR_CM = { mm: 10, cm: 1, m: 0.01, in: 1 / 2.54, ft: 1 / 30.48 }; // cuán
 
 test('las tolerancias sugeridas salen de config.js y se llevan a la unidad del documento', () => {
   assert.equal(createWorkshop().units, 'cm', 'sin decir nada, cm');
-  assert.deepEqual({ ...createWorkshop().tolerances }, { touch: 0.2, penetration: 0.15, grab: 1, snap: 2.5 }, 'y lo de siempre');
+  assert.deepEqual({ ...createWorkshop().tolerances }, { touch: 0.2, penetration: 0.15, grab: 1, snap: 2.5, minLength: 1 }, 'y lo de siempre');
   const de = (units) => Object.values(createWorkshop({ units }).tolerances);
-  cerca(de('mm'), [2, 1.5, 10, 25], 1e-12);
-  cerca(de('m'), [0.002, 0.0015, 0.01, 0.025], 1e-12);
-  cerca(de('in'), [1 / 16, 3 / 64, 3 / 8, 1], 1e-12, 'imperial: en fracciones de pulgada, no en un 0,0787 que nadie dice');
-  cerca(de('ft'), [1 / 192, 3 / 768, 1 / 32, 1 / 12], 1e-12);
+  cerca(de('mm'), [2, 1.5, 10, 25, 10], 1e-12);
+  cerca(de('m'), [0.002, 0.0015, 0.01, 0.025, 0.01], 1e-12);
+  cerca(de('in'), [1 / 16, 3 / 64, 3 / 8, 1, 3 / 8], 1e-12, 'imperial: en fracciones de pulgada, no en un 0,0787 que nadie dice');
+  cerca(de('ft'), [1 / 192, 3 / 768, 1 / 32, 1 / 12, 1 / 32], 1e-12);
   assert.deepEqual(TOLERANCE_PRESETS.metric.unit, 'mm');
   assert.deepEqual(TOLERANCE_PRESETS.imperial.unit, 'in');
 });
@@ -932,7 +932,7 @@ test('la misma escena física da las mismas respuestas en cualquier unidad', () 
 
 test('las tolerancias se pisan al crear el taller, y una tolerancia puntual gana', () => {
   const t = createWorkshop({ units: 'mm', tolerances: { touch: 5 } });
-  assert.deepEqual({ ...t.tolerances }, { touch: 5, penetration: 1.5, grab: 10, snap: 25 }, 'lo no pisado sigue siendo lo sugerido');
+  assert.deepEqual({ ...t.tolerances }, { touch: 5, penetration: 1.5, grab: 10, snap: 25, minLength: 10 }, 'lo no pisado sigue siendo lo sugerido');
   const a = t.addPiece({ size: [400, 20, 300], center: [0, 10, 0] });
   const b = t.addPiece({ size: [400, 20, 300], center: [0, 34, 0] });          // a 4 mm
   assert.ok(a.touches(b), 'con touch 5, a 4 mm se tocan');
@@ -970,7 +970,7 @@ test('la unidad viaja con el documento: se guarda, se carga, y un documento viej
 
 test('config.js: tolerancesFor lleva lo sugerido a la unidad pedida, y convertLength convierte', () => {
   cerca([convertLength(25.4, 'mm', 'in'), convertLength(1, 'ft', 'in'), convertLength(1, 'm', 'cm')], [1, 12, 100], 1e-12);
-  assert.deepEqual({ ...tolerancesFor('cm', { penetration: 0.5 }) }, { touch: 0.2, penetration: 0.5, grab: 1, snap: 2.5 });
+  assert.deepEqual({ ...tolerancesFor('cm', { penetration: 0.5 }) }, { touch: 0.2, penetration: 0.5, grab: 1, snap: 2.5, minLength: 1 });
   assert.ok(Object.isFrozen(tolerancesFor('mm')) && Object.isFrozen(TOLERANCE_PRESETS) && Object.isFrozen(UNITS));
 });
 
@@ -1849,11 +1849,94 @@ test('con kernel, el recorte resta la otra pieza (llevada al marco de esta)', ()
   cerca([llamadas[0].center.x, llamadas[0].min.z, llamadas[0].max.z], [10, -50, 50], 1e-9, 'la caja de B, en el marco de A');
 });
 
+// ---------- estirar un conjunto por un plano ----------
+
+/** Una mesa: tapa de 90 × 2 × 50 a 74 de altura y cuatro patas de 4 × 74 × 4 en las esquinas. */
+const mesa = (t) => {
+  const tapa = t.addPiece({ name: 'Tapa', size: [90, 2, 50], center: [0, 75, 0] });
+  const patas = [[-43, -23], [43, -23], [-43, 23], [43, 23]].map(([x, z]) => t.addPiece({ name: 'Pata', size: [4, 74, 4], center: [x, 37, z] }));
+  return { tapa, patas, m: t.assemble([tapa, ...patas], { name: 'Mesa' }) };
+};
+/** Lo que ocupa cada pieza en el marco del ensamble, redondeado. */
+const enElEnsamble = (e) => e.pieces.map((p) => {
+  const b = BoundingBox.fromPoints(p.vertices.map((v) => v.transform(e.placement.inverse())));
+  return [...b.min.toArray(), ...b.max.toArray()].map((v) => Math.round(v * 1e6) / 1e6).join(',');
+});
+
+test('mesa: estirar el ancho +20 desde la derecha: la tapa crece 20, las patas derechas se corren 20 y las izquierdas quedan', () => {
+  const t = createWorkshop();
+  const { tapa, patas, m } = mesa(t);
+  assert.deepEqual(m.stretchPlanes('x')[0], { plane: 0, gap: 82 }, 'el hueco más ancho: entre las patas');
+  const plan = m.stretch({ axis: 'x', side: 1, delta: 20 });
+  assert.equal(plan.limited, false);
+  assert.deepEqual(plan.pieces.map((x) => x.action), ['stretch', 'stay', 'move', 'stay', 'move']);
+  assert.equal(tapa.dims.length, 110);
+  cerca([tapa.boundingBox.min.x, tapa.boundingBox.max.x], [-45, 65]);
+  cerca(patas.map((p) => p.boundingBox.center.x), [-43, 63, -43, 63]);
+  t.undo();
+  assert.equal(tapa.dims.length, 90, 'un solo paso de deshacer');
+});
+
+test('achicar más allá del mínimo se limita: los lados no se cruzan', () => {
+  const t = createWorkshop();
+  const { tapa, patas, m } = mesa(t);
+  const plan = m.stretchPlan({ axis: 'x', delta: -200 });
+  assert.equal(plan.limited, true);
+  cerca([plan.min], [-82], 1e-9, 'hasta que las patas de un lado tocan las del otro');
+  m.stretch({ axis: 'x', delta: -200 });
+  cerca([tapa.dims.length, patas[1].boundingBox.min.x], [8, -41]);
+  assert.ok(patas[1].touches(patas[0]) && !patas[1].intersects(patas[0]));
+  const sola = createWorkshop();
+  const larga = sola.addPiece({ size: [100, 4, 4] });
+  const e = sola.assemble([larga, sola.addPiece({ size: [4, 4, 4], center: [60, 0, 0] })]);
+  e.stretch({ axis: 'x', plane: 0, delta: -1000, minLength: 5 });
+  assert.equal(larga.dims.length, 5, 'ninguna estirada baja del mínimo');
+});
+
+test('las patas bloqueadas nunca se estiran: el plano que las cruza las mueve o las deja enteras', () => {
+  const t = createWorkshop();
+  const { tapa, patas, m } = mesa(t);
+  // en el marco del ensamble (su origen, en el centro de lo que junta: y = 38), las patas van de -38 a 36
+  assert.deepEqual(m.stretchPlanes('y', { locked: patas }).map((p) => p.plane), [37], 'no se ofrece un plano que cruce una pata bloqueada');
+  const plan = m.stretch({ axis: 'y', plane: -1, delta: 10, locked: patas });
+  assert.ok(plan.pieces.filter((x) => x.part.name === 'Pata').every((x) => x.action !== 'stretch' && x.reason === 'locked'));
+  assert.ok(patas.every((p) => p.dims.length === 74));
+  cerca([tapa.boundingBox.min.y], [84], 1e-9, 'la tapa, del lado que se arrastra, sube 10');
+});
+
+test('la misma mesa girada 90° da el mismo resultado en el marco del ensamble', () => {
+  const recto = createWorkshop(), girado = createWorkshop();
+  const a = mesa(recto), b = mesa(girado);
+  b.m.rotate(90, 'y').rotate(30, 'x');
+  a.m.stretch({ axis: 'x', delta: 20 });
+  b.m.stretch({ axis: 'x', delta: 20 });
+  assert.deepEqual(enElEnsamble(b.m), enElEnsamble(a.m));
+});
+
+test('una pieza que cruza el plano en diagonal se mueve entera con el lado de su centro', () => {
+  const t = createWorkshop();
+  const larguero = t.addPiece({ size: [200, 4, 10] });
+  const diagonal = t.addPiece({ size: [60, 4, 4], center: [5, 20, 0] }).rotate(45, 'z');
+  const e = t.assemble([larguero, diagonal]);
+  const plan = e.stretchPlan({ axis: 'x', plane: 0, delta: 10 });
+  const d = plan.pieces.find((x) => x.part.id === diagonal.id);
+  assert.deepEqual([d.action, d.reason], ['move', 'diagonal']);
+  assert.equal(plan.pieces.find((x) => x.part.id === larguero.id).action, 'stretch');
+});
+
+test('estirar una pieza con operaciones las reaplica (van normalizadas)', () => {
+  const t = createWorkshop();
+  const p = t.addPiece({ size: [60, 4, 5] }).addOperation({ kind: 'cut', axis: 2, outline: TRAPECIO });
+  const e = t.assemble([p, t.addPiece({ size: [4, 4, 4], center: [40, 0, 0] })]);
+  e.stretch({ axis: 'x', plane: 0, delta: 60 });
+  cerca([p.local.solid.volume], [0.75 * 120 * 4 * 5], 1e-9);
+});
+
 // ---------- que el SDK siga siendo puro ----------
 
 test('el SDK no depende de ningún paquete externo ni del navegador (lo puede usar el servidor)', async () => {
   const { readFile } = await import('node:fs/promises');
-  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/units.js', 'src/config.js', 'src/solid.js', 'src/polygon.js', 'src/convex.js', 'src/sections.js', 'src/features.js', 'src/grab.js', 'src/placement.js', 'src/index.js', 'examples/demo.js']) {
+  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/units.js', 'src/config.js', 'src/solid.js', 'src/polygon.js', 'src/convex.js', 'src/sections.js', 'src/features.js', 'src/grab.js', 'src/placement.js', 'src/stretch.js', 'src/index.js', 'examples/demo.js']) {
     const src = await readFile(new URL(`../${f}`, import.meta.url), 'utf8');
     const sin = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
     const ext = [...sin.matchAll(/^\s*(?:import|export)[^'"]*?from\s*['"]([^'"]+)['"]/gm)]

@@ -12,7 +12,8 @@ bruto más una lista de operaciones, y la forma que resulta es un cálculo) y
 [#7](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/7) (formas reales: perfiles,
 torneados y su geometría), [#8](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/8)
 (agarre), [#9](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/9) (colocación) y
-[#10](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/10) (recortes entre piezas).
+[#10](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/10) (recortes entre piezas) y
+[#11](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/11) (estirar un conjunto).
 
 ### Breaking
 
@@ -53,6 +54,9 @@ torneados y su geometría), [#8](https://github.com/EasyIndustry/ThreeJS-cad-SDK
 - Agarre: `parte.closest(punto, { tolerance?, space? })` (vértice, arista o cara más cercana,
   con franja por eje), `taller.pick(rayo, { exclude? })` (la primera pieza que corta, contra su
   forma real) y `sameFeature(a, b)`.
+- Estirar: `ensamble.stretchPlanes(axis)`, `stretchPlan({ axis, plane?, side, delta, locked? })`
+  (previsualizar, con su límite) y `stretch(...)` (en un solo paso de deshacer), en el marco del
+  ensamble. `taller.tolerances.minLength`.
 - Recortes: la operación `{ kind: 'trim', against, mode: 'box' | 'shape' }`. Depende del marco
   relativo entre las dos piezas (mover el ensamble que las contiene no la recalcula); borrar la
   otra quita el recorte en el mismo paso; mover la otra avisa por la recortada.
