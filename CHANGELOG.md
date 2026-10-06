@@ -10,8 +10,8 @@ en una app antes del release (ver `CONTRIBUTING.md`).
 Responde a [#6](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/6) (la pieza es su
 bruto más una lista de operaciones, y la forma que resulta es un cálculo) y
 [#7](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/7) (formas reales: perfiles,
-torneados y su geometría) y [#8](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/8)
-(agarre).
+torneados y su geometría), [#8](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/8)
+(agarre) y [#9](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/9) (colocación).
 
 ### Breaking
 
@@ -52,6 +52,10 @@ torneados y su geometría) y [#8](https://github.com/EasyIndustry/ThreeJS-cad-SD
 - Agarre: `parte.closest(punto, { tolerance?, space? })` (vértice, arista o cara más cercana,
   con franja por eje), `taller.pick(rayo, { exclude? })` (la primera pieza que corta, contra su
   forma real) y `sameFeature(a, b)`.
+- Colocación, funciones que proponen y no aplican: `taller.snap(partes, { distance?, grid? })`,
+  `taller.pushOut(partes, { floor?, up? })`, `taller.drop(partes, { floor?, up? })`,
+  `taller.alignmentGuides(partes)` y `Transform.orient(caraA, caraB, { faceToward?, flip? })`.
+  Andan con piezas giradas y con grupos.
 - `taller.tolerances` suma `grab` (agarre) y `snap` (imán), y `GRAB_RATIO`: valores sugeridos en
   `config.js`.
 - `Mesh.surfaces` y `Mesh.smooth`: qué triángulos son la misma cara y cuáles aproximan una

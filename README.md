@@ -264,6 +264,32 @@ taller.contacts({ exact: true });
 La forma real se arma con pedazos convexos (`src/convex.js`), así que el contacto exacto no
 necesita kernel. Un contacto contra una superficie curva es la línea donde apoya.
 
+## Colocación
+
+Lo que hace cómodo armar a mano. Son funciones que **proponen**: devuelven una traslación (y qué
+la causó) y no tocan nada; la app decide si la aplica, por ejemplo mientras arrastra.
+
+```js
+const s = taller.snap(pieza);                // imán: { transform, snaps: [{ normal, delta, other, kind }] } o null
+pieza.transform(s.transform);
+taller.snap(pieza, { distance: 1, grid: 1 }); // a otra distancia, y lo que no pegó a nada, a la grilla
+taller.pushOut(pieza, { floor: 0 });          // si está metida en otra: { transform, from } que la saca
+taller.drop([pata1, pata2], { floor: 0 });    // apoyar: { transform, distance, on }
+taller.alignmentGuides(pieza);                // con qué planos quedó alineada, los más cercanos primero
+Transform.orient(caraA, caraB, { flip });     // la cara A sobre la B, enfrentadas y con los centros juntos
+```
+
+- Todas andan con piezas giradas (trabajan con cajas orientadas) y reciben una pieza o un
+  **grupo** que se mueve junto.
+- **Imán:** pega las caras de lo que se mueve a las caras paralelas de piezas cercanas,
+  enfrentadas (`kind: 'face'`: quedan tocándose) o del mismo lado (`'flush'`: quedan al ras). La
+  distancia es `taller.tolerances.snap` (25 mm, o 1 in) si no se pasa otra. `delta` es cuánto
+  moverse a lo largo de `normal`.
+- **Sacar del choque:** por el lado de menor penetración, iterando si al salir de una entra en
+  otra; con `floor` (y `up`, `'y'` por defecto) nunca queda por debajo del piso.
+- **Apoyar:** barre lo que se mueve hacia abajo (contra `up`) hasta el primer contacto o el piso.
+- La grilla, el piso y la dirección de arriba son decisiones de la app: van como parámetros.
+
 ## Agarre
 
 Lo que necesita un imán: qué rasgo de una pieza está debajo del cursor, y qué pieza corta un rayo.

@@ -11,7 +11,7 @@
 //
 // Las medidas son números en la unidad del documento (`taller.units`); los ángulos, en grados.
 // Este módulo no importa three ni DOM.
-import { frame, compose, invert, apply as applyFrame, rotate as rotateVec, turn, isQuarterTurn, toEuler, fromEuler } from './frame.js';
+import { frame, compose, invert, apply as applyFrame, rotate as rotateVec, turn, isQuarterTurn, toEuler, fromEuler, mul3, identity3 } from './frame.js';
 import { help } from './help.js';
 
 /** @typedef {import('./frame.js').Vec3} Vec3 */
@@ -401,6 +401,34 @@ export class Transform {
   }
 
   /**
+   * Orient (como el de Grasshopper): la transformación rígida que lleva la cara `a` sobre la
+   * cara `b`. Los centros coinciden; con `faceToward` (por defecto) quedan enfrentadas —se
+   * tocan—, y si no, mirando para el mismo lado. El primer lado de `a` (su "ancho") queda a lo
+   * largo del primer lado de `b`; `flip` lo gira 180° sobre la normal.
+   * @param {Face} a @param {Face} b @param {{ faceToward?: boolean, flip?: boolean }} [opts]
+   */
+  static orient(a, b, { faceToward = true, flip = false } = {}) {
+    /** @param {Face} f */
+    const marco = (f) => {
+      const n = f.normal.unitize();
+      const e = f.vertices[1].subtract(f.vertices[0]);
+      const u = e.add(n.multiply(-e.dot(n))).unitize();
+      return { o: f.center, u, v: n.cross(u), n };
+    };
+    const A = marco(a), B = marco(b);
+    const nT = faceToward ? B.n.reverse() : B.n;
+    const uT = flip ? B.u.reverse() : B.u;
+    const vT = nT.cross(uT);
+    const T = [uT, vT, nT], S = [A.u, A.v, A.n];
+    const k = /** @type {const} */ (['x', 'y', 'z']);
+    // R = [uT vT nT] · [uA vA nA]ᵀ
+    const r = /** @type {import('./frame.js').Mat3} */ ([0, 1, 2].flatMap((i) => [0, 1, 2].map((j) => T.reduce((acc, w, m) => acc + w[k[i]] * S[m][k[j]], 0))));
+    const R = mul3(r, identity3()); // asentada: los cuartos de vuelta quedan exactos
+    const o = rotateVec(R, A.o.toArray());
+    return new Transform(frame([B.o.x - o[0], B.o.y - o[1], B.o.z - o[2]], R));
+  }
+
+  /**
    * Aplica la transformación a todo lo del array: puntos, vectores, líneas, piezas,
    * ensambles. Devuelve lo transformado (valores nuevos, o las mismas partes). Si en el
    * array está un ensamble y también algo de adentro, lo de adentro no se mueve dos veces:
@@ -454,6 +482,7 @@ export class Transform {
     ['static identity()', 'la que no hace nada'],
     ['static translation(v) / translation(from, to)', 'trasladar por un vector, o de un punto a otro'],
     ['static rotation(degrees, axis?, center?)', "girar en grados; eje 'x' | 'y' | 'z' o un vector; centro por defecto el origen"],
+    ['static orient(faceA, faceB, { faceToward?, flip? })', 'lleva la cara A sobre la B (centros juntos, enfrentadas o del mismo lado); flip gira 180°'],
     ['static fromEuler(radians)', "el giro de un Euler XYZ en radianes (Rx · Ry · Rz), la convención 'XYZ' de three.js; sin traslación"],
     ['static apply(t, items)', 'aplicarla a todo un array (piezas, ensambles, puntos…)'],
     ['static check(t)', 'falla con un mensaje claro si t no es un Transform'],

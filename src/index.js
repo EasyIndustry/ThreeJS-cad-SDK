@@ -30,6 +30,7 @@ import { arrayTransforms } from './array.js';
 import { UNITS, convertLength } from './units.js';
 import { TOLERANCE_PRESETS, GRAB_RATIO, tolerancesFor } from './config.js';
 import { closestFeature, rayMesh, rayBox } from './grab.js';
+import { snapMove, pushOutMove, dropMove, guides } from './placement.js';
 import { solidOf, convexPartsOf, checkKernel, OPERATION_KINDS } from './solid.js';
 import { SECTIONS, checkShape, resolveSection } from './sections.js';
 import { featuresOf } from './features.js';
@@ -687,6 +688,26 @@ export function createWorkshop(init = {}) {
   /** @param {(Part | string)[]} list */
   const ids = (list) => list.map((x) => (typeof x === 'string' ? x : x.id));
 
+  // ---------- colocación: proponer, no aplicar ----------
+
+  /** @param {Part | string | (Part | string)[]} x @returns {string[]} los ids de las piezas que se mueven */
+  const piezasQueSeMueven = (x) => [...new Set((Array.isArray(x) ? x : [x]).flatMap((p) => model.piecesOf(idDe(p)).map((q) => q.id)))];
+  /** @param {string[]} mueven @param {(Part | string)[] | undefined} contra */
+  const lasOtras = (mueven, contra) => {
+    const fuera = new Set(mueven);
+    const ids = contra ? contra.flatMap((p) => model.piecesOf(idDe(p)).map((q) => q.id)) : model.allPieces().map((p) => p.id);
+    return [...new Set(ids)].filter((id) => !fuera.has(id)).map((id) => obbOf(model, id));
+  };
+  /** @param {AxisLike | undefined} up @returns {[number, number, number]} */
+  const arriba = (up = 'y') => {
+    const v = typeof up === 'string' ? (/** @type {Record<string, [number, number, number]>} */ ({ x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }))[up] : vec3(up, 'arriba');
+    if (!v) throw new TypeError(`arriba inválido: ${String(up)} (va 'x', 'y', 'z' o un vector)`);
+    const m = Math.hypot(...v);
+    if (!m) throw new Error('arriba no puede ser nulo');
+    return /** @type {[number, number, number]} */ (v.map((x) => x / m));
+  };
+  const escalaDoc = () => Math.max(1, ...model.allPieces().flatMap((p) => p.size));
+
   /**
    * Una instancia de una pieza o de un ensamble: la misma parte colocada otra vez. Editar la
    * fuente (medidas, forma, material, lo de adentro) se ve en todas sus instancias. Nace
@@ -772,6 +793,57 @@ export function createWorkshop(init = {}) {
       const { id, t, n } = mejor;
       return Object.freeze({ part: c.part(id), point: new Point3d(o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t), distance: t, normal: new Vector3d(...n) });
     },
+    /**
+     * Imán: la traslación que pega las caras de lo que se mueve a las de otras piezas que estén
+     * a `distance` o menos (enfrentadas: se tocan; del mismo lado: al ras), y qué la causó. No
+     * aplica nada. `grid`: en los ejes del mundo que el imán no tocó, la esquina cae en la grilla.
+     * @param {Part | string | (Part | string)[]} parts
+     * @param {{ against?: (Part | string)[], distance?: number, grid?: number | null }} [opts]
+     */
+    snap(parts, { against, distance, grid = null } = {}) {
+      const mueven = piezasQueSeMueven(parts);
+      const r = snapMove(mueven.map((id) => obbOf(model, id)), lasOtras(mueven, against), { distance: distance ?? c.tolerances().snap, grid });
+      if (!r) return null;
+      return Object.freeze({
+        transform: Transform.translation(r.t),
+        snaps: Object.freeze(r.snaps.map((x) => Object.freeze({ normal: new Vector3d(...x.normal), delta: x.delta, other: c.part(x.other), kind: x.kind }))),
+      });
+    },
+    /**
+     * Si lo que se mueve está metido en otras piezas, la traslación que lo saca por el lado de
+     * menor penetración (queda tocando, sin meterse). Con `floor`, nunca por debajo del piso,
+     * medido en la dirección `up` ('y' por defecto). null si no está metido en nada.
+     * @param {Part | string | (Part | string)[]} parts
+     * @param {{ against?: (Part | string)[], floor?: number | null, up?: AxisLike }} [opts]
+     */
+    pushOut(parts, { against, floor = null, up } = {}) {
+      const mueven = piezasQueSeMueven(parts);
+      const r = pushOutMove(mueven.map((id) => obbOf(model, id)), lasOtras(mueven, against), { up: arriba(up), floor, scale: escalaDoc() });
+      return r && Object.freeze({ transform: Transform.translation(r.t), from: Object.freeze(r.from.map((id) => c.part(id))) });
+    },
+    /**
+     * Apoyar: cuánto baja lo que se mueve (contra `up`) hasta tocar algo de abajo o el piso, y la
+     * traslación. `on`: la pieza donde apoya, o null si es el piso. null si no hay nada abajo.
+     * @param {Part | string | (Part | string)[]} parts
+     * @param {{ against?: (Part | string)[], floor?: number | null, up?: AxisLike }} [opts]
+     */
+    drop(parts, { against, floor = null, up } = {}) {
+      const mueven = piezasQueSeMueven(parts);
+      const u = arriba(up);
+      const r = dropMove(mueven.map((id) => obbOf(model, id)), lasOtras(mueven, against), { up: u, floor });
+      return r && Object.freeze({ transform: Transform.translation(u.map((x) => -x * r.distance)), distance: r.distance, on: r.on ? c.part(r.on) : null });
+    },
+    /**
+     * Los planos de otras piezas con los que lo que se mueve quedó alineado (a `tolerance` o
+     * menos), los más cercanos primero y sin repetir: para dibujar las guías.
+     * @param {Part | string | (Part | string)[]} parts
+     * @param {{ against?: (Part | string)[], tolerance?: number }} [opts]
+     */
+    alignmentGuides(parts, { against, tolerance } = {}) {
+      const mueven = piezasQueSeMueven(parts);
+      return Object.freeze(guides(mueven.map((id) => obbOf(model, id)), lasOtras(mueven, against), { tolerance: tolerance ?? c.tolerances().touch })
+        .map((g) => Object.freeze({ normal: new Vector3d(...g.normal), offset: g.offset, other: c.part(g.other), kind: g.kind, gap: g.gap })));
+    },
     /** @param {string} id */
     part(id) { return c.part(id); },
     get parts() { return Object.freeze([...model.parts.keys()].map((id) => c.part(id))); },
@@ -830,6 +902,10 @@ export const WORKSHOP_MEMBERS = [
   ['instantiate(part, { name?, parent?, placement? })', 'una instancia: la misma parte colocada otra vez; editar la fuente cambia todas'],
   ['array(part, spec)', "repetir una parte en línea, en área o alrededor de un eje: crea instancias (ver arrayTransforms)"],
   ['pick(ray, { exclude? })', 'la primera pieza que corta un rayo { origin, direction }, contra su forma real: { part, point, distance, normal }, o null'],
+  ['snap(parts, { against?, distance?, grid? })', 'imán: { transform, snaps } que pega sus caras a las de otras piezas cercanas (no aplica nada)'],
+  ['pushOut(parts, { against?, floor?, up? })', 'si está metida en otras, { transform, from } que la saca por el lado de menor penetración'],
+  ['drop(parts, { against?, floor?, up? })', 'apoyar: { transform, distance, on } hasta tocar lo de abajo o el piso'],
+  ['alignmentGuides(parts, { against?, tolerance? })', 'los planos de otras piezas con los que quedó alineada, los más cercanos primero'],
   ['part(id)', 'una parte por su id'],
   ['parts', 'todas las partes'],
   ['roots', 'las partes de primer nivel (las que no están en un ensamble)'],

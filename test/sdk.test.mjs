@@ -1608,11 +1608,132 @@ test('closest en el marco de la parte (space: local)', () => {
   assert.ok(g.point.equals([100, 2, 5], 1e-9));
 });
 
+// ---------- colocación: imán, sacar del choque, apoyar, guías, orient ----------
+// Proponen una traslación (y qué la causó); no aplican nada.
+
+test('una pieza arrastrada a 2 cm del canto de otra queda al ras (el imán propone, no aplica)', () => {
+  const t = createWorkshop();
+  const base = t.addPiece({ size: [60, 2, 40], center: [30, 1, 0] });         // x de 0 a 60
+  const p = t.addPiece({ size: [10, 2, 10], center: [67, 1.7, 3] });         // su cara -x a 2 cm del canto +x de la base
+  const antes = p.boundingBox.toString();
+  const s = t.snap(p);
+  assert.equal(p.boundingBox.toString(), antes, 'no movió nada');
+  // delta: cuánto moverse a lo largo de la normal de la cara que se pega (la -x de la pieza: 2 hacia -x)
+  assert.ok(s.snaps.some((x) => x.kind === 'face' && x.other.id === base.id && x.normal.equals([-1, 0, 0]) && Math.abs(x.delta - 2) < 1e-9));
+  p.transform(s.transform);
+  cerca([p.boundingBox.min.x, p.boundingBox.min.y], [60, 0], 1e-9, 'pegada al canto, y abajo al ras con la base');
+  assert.ok(p.touches(base) && !p.intersects(base));
+  assert.equal(t.snap(p, { distance: 0.5 }).snaps.length, 2, 'ya está pegada: las mismas caras, a 0');
+  assert.equal(t.snap(t.addPiece({ size: [1, 1, 1], center: [500, 500, 500] })), null, 'lejos de todo: nada');
+});
+
+test('el imán con grilla: en los ejes que no pegó a nada, la esquina cae sobre la grilla', () => {
+  const t = createWorkshop();
+  t.addPiece({ size: [60, 2, 40], center: [30, 1, 0] });
+  const p = t.addPiece({ size: [10, 2, 10], center: [67, 1.7, 3.3] });
+  p.transform(t.snap(p, { grid: 1 }).transform);
+  cerca([p.boundingBox.min.x, p.boundingBox.min.z], [60, -2], 1e-9, 'x la puso el imán; z, la grilla (de -1,7 a -2)');
+});
+
+test('una pieza soltada dentro de otra sale por el lado de menor penetración y queda en contacto, sin intersección', () => {
+  const t = createWorkshop();
+  const base = t.addPiece({ size: [60, 10, 40], center: [0, 5, 0] });
+  const p = t.addPiece({ size: [10, 10, 10], center: [26, 6, 0] });          // metida 1 por el costado +x, 9 por arriba
+  assert.ok(p.intersects(base));
+  const r = t.pushOut(p);
+  assert.deepEqual(r.from.map((x) => x.id), [base.id]);
+  assert.ok(r.transform.translationVector.equals([9, 0, 0], 1e-9), 'por el costado, que es lo que menos se mete');
+  p.transform(r.transform);
+  assert.ok(p.touches(base) && !p.intersects(base));
+  assert.equal(t.pushOut(p), null, 'ya afuera: nada');
+});
+
+test('si la base es un larguero girado 45°, sacar del choque deja la pieza tocando la cara inclinada', () => {
+  const t = createWorkshop();
+  const base = larguero(t, [0, 0, 0]).rotate(45, 'z');                     // 200 × 4 × 10, girado sobre z
+  const p = t.addPiece({ size: [4, 4, 4], center: [0, 3, 0] });             // metida en la cara de arriba
+  p.transform(t.pushOut(p).transform);
+  assert.ok(p.touches(base) && !p.intersects(base));
+  // la cara de arriba del larguero: normal (-1, 1, 0)/√2, a 2 del centro
+  const n = new Vector3d(-1, 1, 0).unitize();
+  const cs = p.contactsWith(base);
+  assert.ok(cs.length && cs.every((c) => c.points.every((q) => Math.abs(n.dot(q.toArray()) - 2) <= 0.2)), 'el contacto está sobre la cara inclinada');
+});
+
+test('sacar del choque respeta el piso: no la mete abajo', () => {
+  const t = createWorkshop();
+  t.addPiece({ size: [60, 10, 40], center: [0, 5, 0] });
+  const p = t.addPiece({ size: [10, 4, 10], center: [0, 1, 0] });          // metida por abajo: salir hacia abajo es lo más corto
+  assert.ok(t.pushOut(p).transform.translationVector.y < 0, 'sin piso, sale por abajo');
+  const r = t.pushOut(p, { floor: 0 });
+  assert.ok(r.transform.translationVector.equals([0, 11, 0], 1e-9), 'con piso en 0, sale por arriba: 11');
+  p.transform(r.transform);
+  assert.ok(p.boundingBox.min.y >= -1e-9, 'queda arriba del piso');
+});
+
+test('apoyar: cuánto baja hasta tocar lo de abajo, o el piso', () => {
+  const t = createWorkshop();
+  const mesa = t.addPiece({ size: [60, 2, 40], center: [0, 74, 0] });       // tapa de y 73 a 75
+  const caja = t.addPiece({ size: [10, 10, 10], center: [0, 100, 0] });
+  const r = t.drop(caja);
+  cerca([r.distance], [20]);
+  assert.equal(r.on.id, mesa.id);
+  caja.transform(r.transform);
+  assert.ok(caja.touches(mesa) && !caja.intersects(mesa));
+  const afuera = t.addPiece({ size: [10, 10, 10], center: [100, 50, 0] });
+  assert.equal(t.drop(afuera), null, 'sin nada abajo ni piso: nada');
+  const alPiso = t.drop(afuera, { floor: 0 });
+  cerca([alPiso.distance], [45]);
+  assert.equal(alPiso.on, null);
+  const girada = t.addPiece({ size: [10, 10, 10], center: [0, 100, 0] }).rotate(45, 'z');
+  cerca([t.drop(girada, { against: [mesa] }).distance], [100 - 5 * Math.SQRT2 - 75], 1e-9, 'girada, apoya con su arista');
+});
+
+test('las guías: con qué planos quedó alineada, los más cercanos primero', () => {
+  const t = createWorkshop();
+  const base = t.addPiece({ size: [60, 2, 40], center: [30, 1, 0] });
+  const p = t.addPiece({ size: [10, 2, 10], center: [65.05, 1, 0] });       // al ras arriba y abajo; su -x a 0,05 del canto
+  const g = t.alignmentGuides(p);
+  assert.equal(g[0].kind, 'flush');
+  assert.ok(g.some((x) => x.kind === 'face' && Math.abs(x.gap - 0.05) < 1e-9 && x.other.id === base.id));
+  assert.deepEqual(g.map((x) => Math.abs(x.gap)), [...g.map((x) => Math.abs(x.gap))].sort((a, b) => a - b));
+});
+
+test('un grupo que se mueve junto: el imán y apoyar se calculan para el grupo entero', () => {
+  const t = createWorkshop();
+  const mesa = t.addPiece({ size: [60, 2, 40], center: [0, 1, 0] });
+  const a = t.addPiece({ size: [4, 20, 4], center: [-10, 30, 0] });
+  const b = t.addPiece({ size: [4, 10, 4], center: [10, 30, 0] });           // la de abajo es a: y 20
+  const r = t.drop([a, b]);
+  cerca([r.distance], [18], 1e-9, 'baja hasta que la más baja toca');
+  assert.equal(r.on.id, mesa.id);
+});
+
+test('orient: la cara de A sobre la de B, enfrentadas, con los centros juntos; flip gira el ancho 180°', () => {
+  const t = createWorkshop();
+  const a = t.addPiece({ size: [20, 2, 10], center: [100, 50, 30] }).rotate(30, 'x');
+  const b = t.addPiece({ size: [60, 4, 40], center: [0, 2, 0] });
+  const caraA = a.faces.find((f) => f.localAxis === 'y' && f.localSide === -1);
+  const caraB = b.faces.find((f) => f.localAxis === 'y' && f.localSide === 1);
+  const T = Transform.orient(caraA, caraB);
+  a.transform(T);
+  const [c] = a.contactsWith(b);
+  assert.equal(c.kind, 'face');
+  cerca([c.area], [200], 1e-9);
+  const nueva = a.faces.find((f) => f.localAxis === 'y' && f.localSide === -1);
+  assert.ok(nueva.center.equals(caraB.center, 1e-9), 'los centros juntos');
+  const largo = a.directions.length;
+  a.transform(Transform.orient(nueva, caraB, { flip: true }));
+  assert.ok(a.directions.length.equals(largo.reverse(), 1e-9), 'con flip, el largo queda al revés');
+  const mismoLado = Transform.orient(caraA, caraB, { faceToward: false });
+  assert.ok(caraA.normal.transform(mismoLado).equals(caraB.normal, 1e-9));
+});
+
 // ---------- que el SDK siga siendo puro ----------
 
 test('el SDK no depende de ningún paquete externo ni del navegador (lo puede usar el servidor)', async () => {
   const { readFile } = await import('node:fs/promises');
-  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/units.js', 'src/config.js', 'src/solid.js', 'src/polygon.js', 'src/convex.js', 'src/sections.js', 'src/features.js', 'src/grab.js', 'src/index.js', 'examples/demo.js']) {
+  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/units.js', 'src/config.js', 'src/solid.js', 'src/polygon.js', 'src/convex.js', 'src/sections.js', 'src/features.js', 'src/grab.js', 'src/placement.js', 'src/index.js', 'examples/demo.js']) {
     const src = await readFile(new URL(`../${f}`, import.meta.url), 'utf8');
     const sin = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
     const ext = [...sin.matchAll(/^\s*(?:import|export)[^'"]*?from\s*['"]([^'"]+)['"]/gm)]
