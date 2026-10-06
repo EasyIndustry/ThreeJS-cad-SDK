@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createWorkshop, Part, Piece, Assembly, Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, WORKSHOP_MEMBERS,
-  arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, tolerancesFor,
+  arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, tolerancesFor, Mesh, OPERATION_KINDS,
 } from '../src/index.js';
 import * as sdk from '../src/index.js';
 import { Model } from '../src/model.js';
@@ -296,6 +296,7 @@ for (const [cls, members, campos] of [
   [Transform, Transform.members, ['frame']],
   [Contact, Contact.members, ['kind', 'a', 'b', 'points', 'area', 'normal', 'faceA', 'faceB']],
   [Intersection, Intersection.members, ['a', 'b', 'volume', 'depth', 'vertices', 'faces']],
+  [Mesh, Mesh.members, ['positions', 'indices']],
   [Piece, [...Piece.members, ...Part.members], ['id']],
   [Assembly, [...Assembly.members, ...Part.members], ['id']],
 ]) {
@@ -1067,7 +1068,7 @@ test('rollback() cancela el gesto entero, y transaction(fn) vuelve atrás si fn 
   assert.equal(doc(t), antes);
   assert.equal(t.transaction(() => 42), 42, 'devuelve lo que devuelve fn');
   t.undo();
-  assert.equal(doc(t), '{"version":3,"units":"cm","counters":{"piece":0,"assembly":0,"instance":0},"parts":[]}', 'ni el rollback ni la transacción vacía dejaron pasos');
+  assert.equal(doc(t), '{"version":4,"units":"cm","counters":{"piece":0,"assembly":0,"instance":0},"parts":[]}', 'ni el rollback ni la transacción vacía dejaron pasos');
 });
 
 test('una operación que falla a mitad de camino no deja nada hecho', () => {
@@ -1186,11 +1187,200 @@ test('lo guardado es inmutable: nadie lo cambia por la espalda', () => {
   assert.equal(a.dims.length, 200);
 });
 
+// ---------- pieza = bruto + operaciones; la forma es un cálculo ----------
+
+const TRAPECIO = [[0, 0], [1, 0], [1, 0.5], [0, 1]]; // área 0,75 del cuadrado unitario
+
+/** Un kernel de mentira: anota qué le piden y devuelve lo que recibió, así se ve la cadena. */
+const kernelDePrueba = () => {
+  const llamadas = [];
+  const anota = (que) => (a, b) => { llamadas.push({ que, tool: b }); return { positions: a.positions, indices: a.indices }; };
+  return { llamadas, kernel: { intersect: anota('intersect'), subtract: anota('subtract') } };
+};
+
+test('las operaciones no cambian el bruto: ni las medidas, ni dims, ni la caja, ni el contacto', () => {
+  const t = createWorkshop();
+  const p = t.addPiece({ size: [60, 4.5, 4.5], center: [0, 2.25, 0] });
+  const antes = { dims: p.dims, caja: pts(p.vertices), stock: JSON.stringify(p.stock) };
+  p.addOperation({ kind: 'cut', axis: 2, outline: TRAPECIO });
+  assert.deepEqual(p.dims, antes.dims);
+  assert.deepEqual(pts(p.vertices), antes.caja);
+  assert.equal(JSON.stringify(p.stock), antes.stock);
+  assert.deepEqual(p.operations.map((o) => [o.id, o.kind]), [['O-1', 'cut']]);
+  assert.ok(Object.isFrozen(p.operations) && Object.isFrozen(p.operations[0]));
+  assert.deepEqual(OPERATION_KINDS, ['cut', 'hole']);
+});
+
+test('sin operaciones la forma es la caja; con un corte, la extrusión del contorno (sin kernel)', () => {
+  const t = createWorkshop();
+  const p = t.addPiece({ size: [60, 4, 5] });
+  cerca([p.local.solid.volume], [60 * 4 * 5], 1e-9);
+  assert.equal(p.local.solid.triangleCount, 12);
+  p.addOperation({ kind: 'cut', axis: 2, outline: TRAPECIO });
+  cerca([p.local.solid.volume], [0.75 * 60 * 4 * 5], 1e-9, 'el trapecio ocupa 3/4 de la cara');
+  const b = p.local.solid.boundingBox;
+  cerca([...b.min.toArray(), ...b.max.toArray()], [-30, -2, -2.5, 30, 2, 2.5], 1e-12, 'no se sale del bruto');
+});
+
+test('un corte por cualquiera de los tres ejes da un sólido bien orientado (volumen positivo)', () => {
+  for (const axis of [0, 1, 2]) {
+    const t = createWorkshop();
+    const p = t.addPiece({ size: [6, 8, 10] }).addOperation({ kind: 'cut', axis, outline: TRAPECIO });
+    cerca([p.local.solid.volume], [0.75 * 6 * 8 * 10], 1e-9, `eje ${axis}`);
+  }
+});
+
+test('un contorno cóncavo se triangula bien', () => {
+  const t = createWorkshop();
+  const ele = [[0, 0], [1, 0], [1, 0.25], [0.25, 0.25], [0.25, 1], [0, 1]]; // una L: área 0,4375
+  const p = t.addPiece({ size: [40, 40, 2] }).addOperation({ kind: 'cut', axis: 2, outline: ele });
+  cerca([p.local.solid.volume], [0.4375 * 40 * 40 * 2], 1e-9);
+});
+
+test('estirar la pieza reaplica las operaciones: el contorno normalizado se estira con ella', () => {
+  const t = createWorkshop();
+  const p = t.addPiece({ size: [60, 4, 5] }).addOperation({ kind: 'cut', axis: 2, outline: TRAPECIO });
+  p.resize([120, 4, 5]);
+  cerca([p.local.solid.volume], [0.75 * 120 * 4 * 5], 1e-9);
+  cerca([p.local.solid.boundingBox.max.x], [60]);
+});
+
+test('sacar una operación devuelve exactamente la forma de antes', () => {
+  const t = createWorkshop();
+  const p = t.addPiece({ size: [60, 4, 5] });
+  const antes = p.local.solid;
+  p.addOperation({ kind: 'cut', axis: 1, outline: TRAPECIO });
+  assert.notDeepEqual(p.local.solid.positions, antes.positions);
+  p.removeOperation('O-1');
+  assert.deepEqual(p.local.solid.positions, antes.positions);
+  assert.deepEqual(p.local.solid.indices, antes.indices);
+});
+
+test('cambiar una operación la reemplaza en su lugar y con su id', () => {
+  const t = createWorkshop();
+  const p = t.addPiece({ size: [60, 4, 5] })
+    .addOperation({ kind: 'hole', axis: 2, side: 1, at: [0.5, 0.5], diameter: 1 })
+    .addOperation({ kind: 'hole', axis: 2, side: 1, at: [0.2, 0.5], diameter: 1 });
+  p.updateOperation('O-1', { kind: 'hole', axis: 2, side: -1, at: [0.1, 0.1], diameter: 2, depth: 1 });
+  assert.deepEqual(p.operations.map((o) => [o.id, o.side, o.diameter]), [['O-1', -1, 2], ['O-2', 1, 1]]);
+  assert.throws(() => p.removeOperation('O-9'), /no tiene la operación O-9/);
+});
+
+test('la forma en el mundo es la local, colocada: con la pieza girada, igual que su caja', () => {
+  const t = createWorkshop();
+  const p = t.addPiece({ size: [60, 4, 5], center: [10, 20, 30] }).rotate(90, 'y');
+  const b = p.solid.boundingBox, c = p.boundingBox;
+  cerca([...b.min.toArray(), ...b.max.toArray()], [...c.min.toArray(), ...c.max.toArray()], 1e-9);
+});
+
+test('varios cortes o agujeros combinan sólidos en 3D: sin kernel, un error que dice cómo pasarlo', () => {
+  const t = createWorkshop();
+  const p = t.addPiece({ size: [60, 4, 5] })
+    .addOperation({ kind: 'cut', axis: 2, outline: TRAPECIO })
+    .addOperation({ kind: 'cut', axis: 0, outline: TRAPECIO });
+  assert.throws(() => p.local.solid, /hace falta un kernel: createWorkshop\(\{ kernel/);
+  const q = t.addPiece({ size: [60, 4, 5] }).addOperation({ kind: 'hole', axis: 0, side: 1, at: [0.5, 0.5], diameter: 1 });
+  assert.throws(() => q.solid, /kernel/);
+  assert.throws(() => createWorkshop({ kernel: {} }), /kernel inválido/);
+});
+
+test('con kernel, las operaciones se aplican en orden sobre el bruto, con sus herramientas', () => {
+  const { llamadas, kernel } = kernelDePrueba();
+  const t = createWorkshop({ kernel });
+  const p = t.addPiece({ size: [10, 10, 4] })
+    .addOperation({ kind: 'cut', axis: 2, outline: TRAPECIO })
+    .addOperation({ kind: 'hole', axis: 2, side: 1, at: [0.5, 0.5], diameter: 1, depth: 2 });
+  p.local.solid;
+  assert.deepEqual(llamadas.map((l) => l.que), ['intersect', 'subtract']);
+  const corte = llamadas[0].tool.boundingBox, agujero = llamadas[1].tool.boundingBox;
+  assert.ok(corte.min.z < -2 && corte.max.z > 2, 'el prisma del corte pasa de lado a lado (sobresale, sin caras coplanares)');
+  cerca([agujero.min.x, agujero.max.x, agujero.min.y, agujero.max.y], [-0.5, 0.5, -0.5, 0.5], 1e-9, 'el agujero tiene su diámetro, en su lugar');
+  cerca([agujero.min.z], [0], 1e-12, 'entra 2 por la cara de +z (que está en z = 2)');
+  assert.ok(agujero.max.z > 2, 'y sobresale por afuera');
+});
+
+test('la forma se cachea mientras la definición no cambie, y las instancias comparten la de su fuente', () => {
+  const { llamadas, kernel } = kernelDePrueba();
+  const t = createWorkshop({ kernel });
+  const p = t.addPiece({ size: [10, 10, 4] })
+    .addOperation({ kind: 'cut', axis: 2, outline: TRAPECIO })
+    .addOperation({ kind: 'cut', axis: 0, outline: TRAPECIO });
+  const [i] = t.array(p, { type: 'linear', count: 2, direction: [1, 0, 0], distance: 50 });
+  p.local.solid;
+  const n = llamadas.length;
+  p.local.solid; p.solid; i.local.solid; i.solid;
+  p.move([5, 0, 0]);
+  p.rename('Otra');
+  p.local.solid;
+  assert.equal(llamadas.length, n, 'ni otra pieza que es la misma, ni moverla o renombrarla, la recalculan');
+  t.undo(); t.undo();
+  p.local.solid;
+  assert.equal(llamadas.length, n, 'deshacer vuelve a encontrar la que había');
+  p.resize([20, 10, 4]);
+  i.local.solid;
+  assert.equal(llamadas.length, 2 * n, 'cambiar la definición sí');
+});
+
+test('las operaciones se guardan con el documento, la forma no; y deshacer las devuelve', () => {
+  const t = createWorkshop();
+  const p = t.addPiece({ size: [60, 4, 5] }).addOperation({ kind: 'cut', axis: 2, outline: TRAPECIO });
+  const json = JSON.stringify(t.toJSON());
+  assert.equal(JSON.parse(json).version, 4);
+  assert.ok(json.includes('"operations":[{"id":"O-1","kind":"cut"'));
+  assert.ok(!json.includes('positions'), 'la forma que resulta no se guarda');
+  const u = createWorkshop();
+  u.load(JSON.parse(json));
+  assert.equal(JSON.stringify(u.toJSON()), json);
+  cerca([u.part(p.id).local.solid.volume], [p.local.solid.volume]);
+  t.undo();
+  assert.deepEqual(p.operations, []);
+  t.redo();
+  assert.equal(p.operations.length, 1);
+});
+
+test('un documento de una versión más nueva del formato no se carga a medias', () => {
+  const t = createWorkshop();
+  larguero(t);
+  assert.throws(() => t.load({ version: 99, counters: {}, parts: [] }), /versión 99 del formato, más nueva/);
+  assert.equal(t.parts.length, 1);
+});
+
+test('operaciones inválidas: errores claros, y a una instancia no se le hacen', () => {
+  const t = createWorkshop();
+  const p = t.addPiece({ size: [10, 10, 10] });
+  const malas = [
+    [{ kind: 'pulir' }, /operación desconocida: pulir/],
+    [{ kind: 'cut', axis: 3, outline: TRAPECIO }, /eje inválido/],
+    [{ kind: 'cut', axis: 2, outline: [[0, 0], [1, 1]] }, /al menos 3 puntos/],
+    [{ kind: 'cut', axis: 2, outline: [[0, 0], [1.5, 0], [1, 1]] }, /normalizado/],
+    [{ kind: 'cut', axis: 2, outline: [[0, 0], [0.5, 0.5], [1, 1]] }, /no encierra área/],
+    [{ kind: 'cut', axis: 2, outline: [[0, 0], [1, 0], [0, 1], [0.8, 0.9]] }, /se cruza consigo mismo/],
+    [{ kind: 'hole', axis: 2, side: 0, at: [0.5, 0.5], diameter: 1 }, /lado inválido/],
+    [{ kind: 'hole', axis: 2, side: 1, at: [0.5, 0.5], diameter: 0 }, /diámetro inválido/],
+    [{ kind: 'hole', axis: 2, side: 1, at: [0.5, 0.5], diameter: 1, depth: -1 }, /profundidad inválida/],
+  ];
+  for (const [op, err] of malas) assert.throws(() => p.addOperation(op), err, JSON.stringify(op));
+  assert.deepEqual(p.operations, [], 'ninguna quedó a medias');
+  const i = t.instantiate(p);
+  assert.throws(() => i.addOperation({ kind: 'cut', axis: 2, outline: TRAPECIO }), /instancia de P-1/);
+});
+
+test('Mesh: un valor, con su volumen, su caja y transform', () => {
+  const m = new Mesh({ positions: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1], indices: [0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3] });
+  cerca([m.volume], [1 / 6]);
+  assert.equal(m.triangleCount, 4);
+  const corrida = m.transform(Transform.translation([10, 0, 0]));
+  assert.equal(corrida.boundingBox.min.x, 10);
+  assert.equal(m.boundingBox.min.x, 0, 'la original no cambia');
+  assert.throws(() => new Mesh({ positions: [0, 0], indices: [] }), /de a tres números/);
+  assert.throws(() => new Mesh({ positions: [0, 0, 0], indices: [0, 0, 1] }), /entre 0 y 0/);
+});
+
 // ---------- que el SDK siga siendo puro ----------
 
 test('el SDK no depende de ningún paquete externo ni del navegador (lo puede usar el servidor)', async () => {
   const { readFile } = await import('node:fs/promises');
-  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/units.js', 'src/config.js', 'src/index.js', 'examples/demo.js']) {
+  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/units.js', 'src/config.js', 'src/solid.js', 'src/index.js', 'examples/demo.js']) {
     const src = await readFile(new URL(`../${f}`, import.meta.url), 'utf8');
     const sin = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
     const ext = [...sin.matchAll(/^\s*(?:import|export)[^'"]*?from\s*['"]([^'"]+)['"]/gm)]

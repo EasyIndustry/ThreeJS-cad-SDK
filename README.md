@@ -224,6 +224,50 @@ createWorkshop({ units: 'in' }).tolerances;       // { touch: 0.0625, penetratio
 - Las ayudas visuales del adaptador de three (ejes, tubos de contacto, etiquetas) se escalan con la
   unidad.
 
+## Bruto y operaciones
+
+**Una pieza es su bruto** —lo que se compra y se corta: sus medidas, la forma de su bruto si no
+es una caja— **más una lista ordenada de operaciones.** Las operaciones son datos y se guardan
+con el documento; la forma que resulta es un cálculo y no se guarda.
+
+```js
+const p = taller.addPiece({ size: [60, 4.5, 4.5] });
+p.addOperation({ kind: 'cut', axis: 2, outline: [[0, 0], [1, 0], [1, 0.5], [0, 1]] });
+p.addOperation({ kind: 'hole', axis: 0, side: 1, at: [0.5, 0.5], diameter: 0.8, depth: 3 });
+p.stock;          // { size, shape }: el bruto; las operaciones no lo cambian
+p.operations;     // [{ id: 'O-1', kind: 'cut', … }, { id: 'O-2', kind: 'hole', … }]
+p.local.solid;    // la forma que resulta (Mesh), en el marco de la pieza
+p.solid;          // la misma, en el mundo
+p.removeOperation('O-2');   // vuelve exactamente a la forma de antes
+```
+
+| operación | qué hace |
+|---|---|
+| `{ kind: 'cut', axis, outline }` | la pieza se queda con lo que cae adentro del contorno, que la atraviesa a lo largo de `axis` (0, 1, 2: x, y, z locales). `outline`: puntos `[u, v]` de 0 a 1 sobre los otros dos ejes, en orden |
+| `{ kind: 'hole', axis, side, at, diameter, depth? }` | un agujero que entra por la cara `side` (1 o -1) de `axis`, en `at = [u, v]` de 0 a 1 sobre esa cara; sin `depth`, pasante |
+
+- **Las operaciones sobreviven a estirar:** las posiciones van normalizadas sobre el bruto, así
+  que `resize` las reaplica. Lo que no se estira (un diámetro, una profundidad) va en la unidad
+  del documento.
+- **`dims`, la caja y el contacto son los del bruto.** Para despiezar, presupuestar o encastrar,
+  manda lo que se compra.
+- **Lo que se resuelve en 2D lo calcula el SDK:** sin operaciones, la caja; con un solo corte, la
+  extrusión del contorno. **Combinar sólidos en 3D** (varios cortes, agujeros) lo hace un kernel
+  que pone la app, para que `src/` no dependa de ninguno:
+
+  ```js
+  const taller = createWorkshop({ kernel: { intersect(a, b) { … }, subtract(a, b) { … } } });
+  ```
+
+  Recibe y devuelve mallas (`{ positions, indices }`) en el marco de la pieza: es el lugar donde
+  enchufar three-bvh-csg, manifold o el que sea. Sin kernel, pedir esa forma da un error que lo
+  dice.
+- **La forma se cachea** mientras no cambie lo que la define (medidas, forma del bruto,
+  operaciones): mover o renombrar la pieza no la recalcula, las instancias comparten la de su
+  fuente y deshacer vuelve a encontrar la de antes.
+- El adaptador de three dibuja la forma que resulta. Si no se puede calcular, dibuja la caja y el
+  motivo queda en `mesh.geometry.userData.solidError`.
+
 ## Instancias y matrices
 
 Una **instancia** es la misma pieza o el mismo ensamble colocado otra vez. Es lo que en Rhino
@@ -376,10 +420,10 @@ política de compatibilidad hacia atrás y el proceso de release están en
 
 Dicho para que nadie lo dé por hecho:
 
-- **La geometría consultable de una pieza es su caja.** La forma (perfil, torneado, corte del
-  CAD) viaja en la definición y el visor la dibuja con el mismo constructor que el taller,
-  pero `vertices`, `edges` y `faces` devuelven los de la caja. Los de la forma real van
-  después, también en el marco local.
+- **`vertices`, `edges` y `faces` son los del bruto como caja.** La forma que resulta de las
+  operaciones ya está (`solid`, una malla), pero sus vértices y aristas "de verdad" —los que
+  usaría un imán— y la forma de un bruto que no es caja (perfil, torneado: `shape`) llegan con
+  el #7. Hasta entonces, una pieza con `shape` la dibuja la app con `geometryFor`.
 - **Transformaciones rígidas solamente.** Escalar una pieza es cambiarle las medidas
   (`resize`), no una transformación; espejar va a necesitar saber de qué mano es cada
   forma. Las dos llegan como constructores nuevos de `Transform` cuando hagan falta.

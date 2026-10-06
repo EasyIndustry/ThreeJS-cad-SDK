@@ -5,6 +5,42 @@ según [SemVer](https://semver.org): mientras sea `0.x`, una versión menor pued
 y si rompe queda dicho arriba de todo en esa entrada. Los pre-releases (`-rc.N`) se prueban
 en una app antes del release (ver `CONTRIBUTING.md`).
 
+## [0.7.0] - sin publicar
+
+Responde a [#6](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/6): la pieza es su
+bruto más una lista de operaciones, y la forma que resulta es un cálculo.
+
+### Breaking
+
+- **`toJSON()` escribe `version: 4`** (las piezas traen `operations`). Esta versión carga los
+  documentos de antes; uno guardado con ella **no lo lee bien la 0.6.0**, que no sabía de
+  versiones y perdería las operaciones sin avisar. Desde esta versión, `load()` rechaza un
+  documento de un formato más nuevo que el que entiende, en vez de cargarlo a medias.
+- `shape` es solo la forma del bruto (perfil, torneado). Los cortes por contorno, que en la app
+  viajaban como `shape.kind === 'cut'`, pasan a ser operaciones `{ kind: 'cut', axis, outline }`
+  (una por eje); esa migración es de la app.
+
+### Added
+
+- `pieza.addOperation(op)`, `updateOperation(id, op)`, `removeOperation(id)` y
+  `pieza.operations`: `{ kind: 'cut', axis, outline }` (contorno normalizado, pasante) y
+  `{ kind: 'hole', axis, side, at, diameter, depth? }`. Posiciones normalizadas sobre el bruto:
+  `resize` las reaplica. `OPERATION_KINDS`.
+- `pieza.stock` (el bruto: `{ size, shape }`), `pieza.solid` (la forma que resulta, en el mundo) y
+  `pieza.local.solid` (en el marco de la pieza).
+- `Mesh`: una malla de triángulos como valor (`positions`, `indices`, `volume`, `boundingBox`,
+  `transform`).
+- `createWorkshop({ kernel: { intersect, subtract } })`: lo que combina sólidos en 3D, para
+  varios cortes o agujeros. Sin operaciones o con un solo corte, el SDK la calcula solo.
+- La forma se cachea por lo que la define (medidas, forma del bruto, operaciones): mover no la
+  recalcula, las instancias comparten la de su fuente y deshacer vuelve a encontrarla.
+
+### Changed
+
+- El adaptador de three dibuja la forma que resulta; si no se puede calcular (falta el
+  kernel), dibuja la caja y deja el motivo en `geometry.userData.solidError`.
+- `dims`, la caja y el contacto siguen siendo los del bruto.
+
 ## [0.6.0] - sin publicar (pre-release `v0.6.0-rc.1`)
 
 Responde a [#2](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/2),
@@ -77,5 +113,6 @@ Primera versión. El núcleo puro (documento, partes, marcos, geometría, contac
 intersección, con `help()` verificado por test) y el adaptador de three que espeja el
 modelo en una escena.
 
-[0.6.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.1.0...test
+[0.7.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.6.0-rc.1...claude/nice-newton-92bqym
+[0.6.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.1.0...v0.6.0-rc.1
 [0.1.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/releases/tag/v0.1.0

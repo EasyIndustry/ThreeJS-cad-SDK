@@ -30,6 +30,7 @@
 // servidor. Lo prueba test/sdk.test.mjs.
 import { frame, compose, invert, apply, rotate, turn, transpose3, isQuarterTurn, axisIndex } from './frame.js';
 import { DEFAULT_UNIT, checkUnit } from './units.js';
+import { checkOperation } from './solid.js';
 
 /** @typedef {import('./frame.js').Vec3} Vec3 */
 /** @typedef {import('./frame.js').Mat3} Mat3 */
@@ -37,6 +38,8 @@ import { DEFAULT_UNIT, checkUnit } from './units.js';
 /** @typedef {import('./frame.js').Axis} Axis */
 /** @typedef {'local' | 'world'} Space */
 /** @typedef {import('./units.js').Unit} Unit */
+/** @typedef {import('./solid.js').Operation} Operation */
+/** @typedef {import('./solid.js').OperationSpec} OperationSpec */
 
 /**
  * Qué eje LOCAL es el largo, el ancho y el espesor de una pieza. Se decide al crearla
@@ -55,7 +58,8 @@ import { DEFAULT_UNIT, checkUnit } from './units.js';
  * @property {Vec3} size         medidas en la unidad del documento, sobre los ejes locales x, y, z
  * @property {Axes} axes
  * @property {string} material
- * @property {object | null} shape  forma (perfil, torneado, corte)
+ * @property {object | null} shape  forma del bruto (perfil, torneado), o null si es una caja
+ * @property {Operation[]} [operations]  lo que se le hace al bruto, en orden (ver solid.js)
  * @property {string} [source]   solo en lo que sale de una instancia: la parte de la que es copia
  */
 /**
@@ -103,6 +107,13 @@ function deepFreeze(o) {
   }
   return o;
 }
+
+/**
+ * La versión del formato de `toJSON()`. Sube cuando un documento guardado trae algo que una
+ * versión anterior del SDK perdería sin darse cuenta; `load` rechaza las que son más nuevas.
+ *   1: partes y ensambles · 2: instancias · 3: unidad · 4: operaciones de las piezas
+ */
+const VERSION_DOCUMENTO = 4;
 
 const PREFIJO = /** @type {const} */ ({ piece: 'P', assembly: 'E', instance: 'I' });
 
@@ -242,7 +253,7 @@ export class Model {
     const base = rec.kind === 'instance' ? this.#sourceOf(rec) : rec;
     const source = id !== rec.id ? rec.id : rec.kind === 'instance' ? rec.source : undefined;
     if (base.kind === 'piece') {
-      return { kind: 'piece', id, name: rec.name, parent, frame: rec.frame, size: base.size, axes: base.axes, material: base.material, shape: base.shape, source };
+      return { kind: 'piece', id, name: rec.name, parent, frame: rec.frame, size: base.size, axes: base.axes, material: base.material, shape: base.shape, operations: base.operations ?? [], source };
     }
     const children = rec.kind === 'assembly' && id === rec.id ? rec.children : base.children.map((c) => `${id}/${c}`);
     return { kind: 'assembly', id, name: rec.name, parent, frame: rec.frame, children, source };
@@ -284,6 +295,19 @@ export class Model {
     if (p.kind === 'instance') throw new Error(`${id} es una instancia: no puede contener partes (sueltala con detach())`);
     if (p.kind !== 'assembly') throw new Error(`${id} no es un ensamble`);
     return p;
+  }
+
+  /**
+   * El registro guardado que DEFINE a una pieza: ella misma, o su fuente si es una instancia
+   * (o de adentro de una). Lo que se deriva de la definición (la forma) se puede cachear por
+   * este registro: es inmutable, y lo comparten todas las copias.
+   * @param {string} id @returns {PieceDef}
+   */
+  definition(id) {
+    this.piece(id); // que exista, y que sea una pieza
+    let rec = /** @type {StoredPart} */ (this.parts.get(/** @type {string} */ (id.split('/').at(-1))));
+    if (rec.kind === 'instance') rec = this.#sourceOf(rec);
+    return /** @type {PieceDef} */ (rec);
   }
 
   /** @param {string} id @returns {PieceDef} */
@@ -654,7 +678,7 @@ export class Model {
       const p = {
         kind: 'piece', id, name: name || `Pieza ${this.counters.piece}`, parent: null,
         frame: frame(at, r), size: [...size], axes: axes ? checkAxes(axes) : axesBySize(size),
-        material, shape: shape ? clone(shape) : null,
+        material, shape: shape ? clone(shape) : null, operations: [],
       };
       this.#put(p);
       if (parent) this.adopt(parent, [id], { keepWorld: false });
@@ -837,6 +861,7 @@ export class Model {
         const real = {
           kind: 'piece', id, name: inst.name, parent: inst.parent, frame: clone(inst.frame),
           size: [...src.size], axes: { ...src.axes }, material: src.material, shape: src.shape ? clone(src.shape) : null,
+          operations: clone(src.operations ?? []),
         };
         this.#put(real);
       } else {
@@ -943,6 +968,55 @@ export class Model {
     });
   }
 
+  // ---------- operaciones: lo que se le hace al bruto ----------
+
+  /** @param {Operation[]} ops */
+  #siguienteOp(ops) {
+    return `O-${Math.max(0, ...ops.map((o) => Number(o.id.slice(2)) || 0)) + 1}`;
+  }
+
+  /** @param {string} pieceId @param {string} opId */
+  #indiceOp(pieceId, opId) {
+    const ops = this.ownPiece(pieceId).operations ?? [];
+    const i = ops.findIndex((o) => o.id === opId);
+    if (i < 0) throw new Error(`${pieceId} no tiene la operación ${opId}`);
+    return { ops, i };
+  }
+
+  /**
+   * Agrega una operación al final de la lista de una pieza. Devuelve su id, único dentro de
+   * la pieza. No cambia el bruto: ni sus medidas ni su caja.
+   * @param {string} pieceId @param {OperationSpec} op @returns {string}
+   */
+  addOperation(pieceId, op) {
+    return this.#paso(() => {
+      const ops = this.ownPiece(pieceId).operations ?? [];
+      const nueva = /** @type {Operation} */ ({ id: this.#siguienteOp(ops), ...checkOperation(op) });
+      this.#patch(pieceId, { operations: [...ops, nueva] });
+      this.emit('operation', [pieceId]);
+      return nueva.id;
+    });
+  }
+
+  /** Reemplaza una operación, en su lugar y con su id. @param {string} pieceId @param {string} opId @param {OperationSpec} op */
+  updateOperation(pieceId, opId, op) {
+    this.#paso(() => {
+      const { ops, i } = this.#indiceOp(pieceId, opId);
+      const nueva = /** @type {Operation} */ ({ id: opId, ...checkOperation(op) });
+      this.#patch(pieceId, { operations: ops.map((o, k) => (k === i ? nueva : o)) });
+      this.emit('operation', [pieceId]);
+    });
+  }
+
+  /** Saca una operación: la forma vuelve a la de antes de ella. @param {string} pieceId @param {string} opId */
+  removeOperation(pieceId, opId) {
+    this.#paso(() => {
+      const { ops, i } = this.#indiceOp(pieceId, opId);
+      this.#patch(pieceId, { operations: ops.filter((_, k) => k !== i) });
+      this.emit('operation', [pieceId]);
+    });
+  }
+
   /**
    * Copia real de lo guardado en `srcId` y de todo lo que cuelga de ello, bajo `parent`.
    * @param {string} srcId @param {string | null} parent @param {Map<string, string>} copias viejo → nuevo
@@ -994,7 +1068,7 @@ export class Model {
   // ---------- guardar ----------
 
   toJSON() {
-    return { version: 3, units: this.units, counters: { ...this.counters }, parts: [...this.parts.values()].map(clone) };
+    return { version: VERSION_DOCUMENTO, units: this.units, counters: { ...this.counters }, parts: [...this.parts.values()].map(clone) };
   }
 
   /**
@@ -1005,6 +1079,10 @@ export class Model {
    */
   load(data) {
     this.#sinTransaccion('cargar un documento');
+    const v = /** @type {{ version?: unknown }} */ (data).version;
+    if (typeof v === 'number' && v > VERSION_DOCUMENTO) {
+      throw new Error(`el documento es de la versión ${v} del formato, más nueva que la que lee este SDK (${VERSION_DOCUMENTO}): hay que actualizar el SDK`);
+    }
     const units = checkUnit(data.units ?? 'cm');
     const parts = new Map(data.parts.map((p) => [p.id, /** @type {StoredPart} */ (deepFreeze(clone(p)))]));
     validate(parts);

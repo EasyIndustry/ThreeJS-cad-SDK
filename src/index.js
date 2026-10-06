@@ -24,14 +24,15 @@
 // Una feature nueva entra primero al modelo (model.js), con su prueba en Node, y recién
 // después se expone acá — con su línea en la tabla de help(), que una prueba exige.
 import { Model } from './model.js';
-import { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, vec3 } from './geometry.js';
+import { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, Mesh, vec3 } from './geometry.js';
 import { obbOf, satDepth, intersectBoxes, contactsOf, candidatePairs } from './contact.js';
 import { arrayTransforms } from './array.js';
 import { UNITS, convertLength } from './units.js';
 import { TOLERANCE_PRESETS, tolerancesFor } from './config.js';
+import { solidOf, checkKernel, OPERATION_KINDS } from './solid.js';
 import { help } from './help.js';
 
-export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, tolerancesFor };
+export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, Mesh, OPERATION_KINDS, arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, tolerancesFor };
 
 /** @typedef {import('./model.js').Space} Space */
 /** @typedef {import('./geometry.js').PointLike} PointLike */
@@ -41,8 +42,11 @@ export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Interse
 /** @typedef {import('./array.js').ArraySpec} ArraySpec */
 /** @typedef {import('./units.js').Unit} Unit */
 /** @typedef {import('./config.js').Tolerances} Tolerances */
+/** @typedef {import('./solid.js').Kernel} Kernel */
+/** @typedef {import('./solid.js').OperationSpec} OperationSpec */
+/** @typedef {import('./solid.js').Operation} Operation */
 
-/** @typedef {{ model: Model, part: (id: string) => Part, forget: (ids: string[]) => void, tolerances: () => Readonly<Tolerances> }} Ctx */
+/** @typedef {{ model: Model, part: (id: string) => Part, forget: (ids: string[]) => void, tolerances: () => Readonly<Tolerances>, solid: (id: string) => Mesh }} Ctx */
 /** El documento al que pertenece cada parte, sin colgárselo a la parte a la vista. @type {WeakMap<Part, Ctx>} */
 const ctxOf = new WeakMap();
 /** @param {Part} p */
@@ -87,6 +91,10 @@ function intersecciones(m, as, bs, tol) {
   }
   return Object.freeze(out);
 }
+
+/** Lo que hace de clave cuando una pieza no tiene forma de bruto u operaciones (un WeakMap no acepta null). */
+const SIN_FORMA = Object.freeze({});
+const SIN_OPERACIONES = /** @type {readonly Operation[]} */ (Object.freeze([]));
 
 /** @param {unknown} x @returns {string} */
 const idDe = (x) => {
@@ -233,7 +241,7 @@ export class Part {
     ['edges', 'sus aristas en el mundo (Line)'],
     ['faces', 'sus caras en el mundo (Face)'],
     ['boundingBox', 'la caja que la encierra, alineada al mundo'],
-    ['local', 'lo mismo en su propio marco: local.vertices, local.edges, local.faces, local.boundingBox'],
+    ['local', 'lo mismo en su propio marco: local.vertices, local.edges, local.faces, local.boundingBox (y local.solid, en una pieza)'],
     ['transform(t)', 'aplicarle un Transform: el verbo del que salen los demás'],
     ['move(v) / move(from, to)', 'trasladar por un vector, o de un punto a otro'],
     ["rotate(degrees, axis?, center?)", "girar en grados; eje 'x' | 'y' | 'z' o un vector; por el centro de su caja"],
@@ -265,15 +273,47 @@ export class Piece extends Part {
     return Object.freeze({ length: ax[AXES[a.length]], width: ax[AXES[a.width]], thickness: ax[AXES[a.thickness]] });
   }
   get material() { return ctx(this).model.piece(this.id).material; }
-  /** Su forma (perfil, torneado, corte del CAD), o null si es un prisma. */
+  /** La forma de su bruto (perfil, torneado), o null si es una caja. */
   get shape() {
     const s = ctx(this).model.piece(this.id).shape;
     return s ? Object.freeze(JSON.parse(JSON.stringify(s))) : null;
   }
-  /** Cambiar sus medidas, en su marco local. No cambia cuál eje es el largo. @param {PointLike} size */
+  /** Su bruto: lo que se compra y se corta. Las operaciones no lo cambian. */
+  get stock() { return Object.freeze({ size: this.size, shape: this.shape }); }
+  /** Lo que se le hace al bruto, en orden (cortes, agujeros), con su id. @returns {readonly Operation[]} */
+  get operations() { return /** @type {readonly Operation[]} */ (ctx(this).model.piece(this.id).operations ?? []); }
+  /**
+   * La forma que resulta, en el mundo: el bruto con sus operaciones. Se calcula, no se guarda.
+   * @returns {Mesh}
+   */
+  get solid() { return this.#solid().transform(this.placement); }
+  /**
+   * Lo mismo que Part.local, más la forma que resulta (`local.solid`) en el marco de la pieza.
+   * @returns {Readonly<{ vertices: readonly Point3d[], edges: readonly Line[], faces: readonly Face[], boundingBox: BoundingBox, solid: Mesh }>}
+   */
+  get local() {
+    const base = super.local, self = this;
+    return Object.freeze({
+      get vertices() { return base.vertices; },
+      get edges() { return base.edges; },
+      get faces() { return base.faces; },
+      get boundingBox() { return base.boundingBox; },
+      /** @returns {Mesh} */
+      get solid() { return self.#solid(); },
+    });
+  }
+  /** @returns {Mesh} */
+  #solid() { return ctx(this).solid(this.id); }
+  /** Cambiar sus medidas, en su marco local. No cambia cuál eje es el largo. Las operaciones se reaplican. @param {PointLike} size */
   resize(size) { ctx(this).model.resize(this.id, vec3(size, 'medidas')); return this; }
   /** @param {string} material */
   setMaterial(material) { ctx(this).model.setMaterial(this.id, material); return this; }
+  /** Agrega una operación al final (ver OPERATION_KINDS). Su id queda en `operations`. @param {OperationSpec} op */
+  addOperation(op) { ctx(this).model.addOperation(this.id, op); return this; }
+  /** Reemplaza una operación, en su lugar. @param {string} id @param {OperationSpec} op */
+  updateOperation(id, op) { ctx(this).model.updateOperation(this.id, id, op); return this; }
+  /** Saca una operación: la forma vuelve a la de antes de ella. @param {string} id */
+  removeOperation(id) { ctx(this).model.removeOperation(this.id, id); return this; }
 
   /** @param {{ print?: boolean }} [opts] */
   static help(opts) { return help('Piece — una pieza: lo que se corta', [...Piece.members, ...Part.members], opts); }
@@ -286,9 +326,15 @@ export class Piece extends Part {
     ['dims', '{ length, width, thickness }: largo, ancho y espesor — gire como gire'],
     ['directions', 'hacia dónde corren su largo, ancho y espesor en el mundo (Vector3d)'],
     ['material', 'su material'],
-    ['shape', 'su forma (perfil, torneado, corte), o null si es un prisma'],
-    ['resize(size)', 'cambiar sus medidas en su marco local'],
+    ['shape', 'la forma de su bruto (perfil, torneado), o null si es una caja'],
+    ['stock', 'su bruto, lo que se compra: { size, shape }; las operaciones no lo cambian'],
+    ['operations', "lo que se le hace al bruto, en orden: { id, kind: 'cut' | 'hole', … }"],
+    ['solid', 'la forma que resulta (Mesh), en el mundo: se calcula, no se guarda'],
+    ['resize(size)', 'cambiar sus medidas en su marco local; las operaciones se reaplican'],
     ['setMaterial(m)', 'cambiarle el material'],
+    ['addOperation(op)', "agregar una operación: { kind: 'cut', axis, outline } o { kind: 'hole', axis, side, at, diameter, depth? }"],
+    ['updateOperation(id, op)', 'reemplazar una operación, en su lugar'],
+    ['removeOperation(id)', 'sacar una operación: la forma vuelve a la de antes'],
     ['static help()', 'esta tabla, sin crear una pieza'],
   ];
 }
@@ -330,12 +376,23 @@ export class Assembly extends Part {
  * del documento: se guarda con él, y un documento cargado trae la suya.
  * `tolerances`: pisa las tolerancias que sugiere config.js para esa unidad, en esa unidad.
  * `historyLimit`: cuántos pasos se pueden deshacer (100 si no se dice; 0: sin historial).
+ * `kernel`: lo que combina sólidos en 3D ({ intersect, subtract }, sobre mallas), para la forma
+ * de las piezas con más de un corte o con agujeros. Lo pone la app (three-bvh-csg, manifold…).
  * También se puede pasar un `Model` ya armado en lugar de las opciones.
- * @param {Model | { units?: Unit, tolerances?: Partial<Tolerances>, historyLimit?: number }} [init]
+ * @param {Model | { units?: Unit, tolerances?: Partial<Tolerances>, historyLimit?: number, kernel?: Kernel }} [init]
  */
 export function createWorkshop(init = {}) {
   const model = init instanceof Model ? init : new Model({ units: init.units, historyLimit: init.historyLimit });
   const override = init instanceof Model ? {} : init.tolerances ?? {};
+  const kernel = init instanceof Model || init.kernel === undefined ? null : checkKernel(init.kernel);
+  /**
+   * La forma de cada pieza, mientras no cambie lo que la define: sus medidas, la forma de su
+   * bruto y sus operaciones. Lo guardado es inmutable y esas partes se comparten entre un
+   * registro y el que lo reemplaza, así que mover o renombrar no la recalcula, y deshacer
+   * vuelve a encontrar la de antes.
+   * @type {WeakMap<object, WeakMap<object, WeakMap<object, Mesh>>>}
+   */
+  const formas = new WeakMap();
   tolerancesFor(model.units, override); // que un valor inválido falle al crear, no en la primera pregunta
   /** @type {Map<string, Part>} */
   const cache = new Map();
@@ -343,6 +400,23 @@ export function createWorkshop(init = {}) {
   const c = {
     model,
     tolerances: () => tolerancesFor(model.units, override),
+    solid(id) {
+      const def = model.definition(id);
+      const claves = [def.size, def.shape ?? SIN_FORMA, def.operations ?? SIN_OPERACIONES];
+      /** @type {WeakMap<object, any>} */
+      let nivel = formas;
+      for (const k of claves.slice(0, -1)) {
+        if (!nivel.has(k)) nivel.set(k, new WeakMap());
+        nivel = nivel.get(k);
+      }
+      const ultima = claves[claves.length - 1];
+      let m = nivel.get(ultima);
+      if (!m) {
+        m = solidOf(def, kernel);
+        nivel.set(ultima, m);
+      }
+      return m;
+    },
     part(id) {
       const kind = model.get(id).kind; // que falle acá, con un mensaje claro, si no existe
       let h = cache.get(id);
@@ -377,7 +451,7 @@ export function createWorkshop(init = {}) {
 
   const workshop = {
     model,
-    Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection,
+    Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, Mesh,
     /**
      * Una pieza nueva.
      * @param {{ name?: string, size: PointLike, material?: string, shape?: object | null,
@@ -493,6 +567,6 @@ export const WORKSHOP_MEMBERS = [
   ['load(data)', 'cargar un documento guardado (borra el historial)'],
   ['clear()', 'vaciar el documento (borra el historial; conserva la unidad)'],
   ['model', 'el modelo por dentro (para el visor y las pruebas)'],
-  ['Point3d  Vector3d  Line  BoundingBox  Face  Transform  Contact  Intersection', 'las clases de valores, a mano'],
+  ['Point3d  Vector3d  Line  BoundingBox  Face  Transform  Contact  Intersection  Mesh', 'las clases de valores, a mano'],
   ['help()', 'esta tabla'],
 ];

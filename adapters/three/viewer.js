@@ -19,8 +19,10 @@
 // La forma y el material de cada pieza los decide la app, si quiere, con dos ganchos:
 //   geometryFor(piece) → BufferGeometry en el marco LOCAL de la pieza, centrada en su origen
 //   materialFor(piece) → Material
-// Por defecto: una caja de sus medidas y un gris neutro para todas, sea cual sea su
-// `material`. El adaptador no conoce catálogos de materiales de ninguna app: eso es de
+// Por defecto: la forma que resulta de la pieza (su bruto con sus operaciones; sin
+// operaciones, una caja de sus medidas) y un gris neutro para todas, sea cual sea su
+// `material`. Si la forma no se puede calcular (p. ej. hace falta un kernel que la app no
+// pasó), se dibuja la caja y el motivo queda en `mesh.geometry.userData.solidError`. El adaptador no conoce catálogos de materiales de ninguna app: eso es de
 // `materialFor`.
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
@@ -46,7 +48,22 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
   // los tamaños de las ayudas (ejes, tubos, etiquetas) están pensados en cm: se llevan a la unidad del documento
   const u = convertLength(1, 'cm', model.units);
   const col = { edge: '#3b2a1e', highlight: '#d6461f', contact: '#2e9a5c', collision: '#d6461f', ...colors };
-  const geo = geometryFor || ((/** @type {PieceDef} */ p) => new THREE.BoxGeometry(p.size[0], p.size[1], p.size[2]));
+  const caja = (/** @type {PieceDef} */ p) => new THREE.BoxGeometry(p.size[0], p.size[1], p.size[2]);
+  const geo = geometryFor || ((/** @type {PieceDef} */ p) => {
+    if (!p.operations?.length) return caja(p);
+    try {
+      const m = workshop.part(p.id).local.solid;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(m.positions, 3));
+      g.setIndex([...m.indices]);
+      g.computeVertexNormals();
+      return g;
+    } catch (e) {
+      const g = caja(p);
+      g.userData.solidError = e instanceof Error ? e.message : String(e);
+      return g;
+    }
+  });
   const mat = materialFor || (() => new THREE.MeshStandardMaterial({ color: GRIS_NEUTRO, roughness: 0.8 }));
 
   const root = new THREE.Group();
@@ -76,7 +93,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
     // las piezas de adentro de una instancia se dibujan como cualquier otra, con su id de camino
     for (const p of model.allPieces()) {
       vivas.add(p.id);
-      const key = JSON.stringify([p.size, p.shape, p.material]);
+      const key = JSON.stringify([p.size, p.shape, p.material, p.operations]);
       let e = mallas.get(p.id);
       if (!e || e.key !== key) {
         if (e) tirar(e);

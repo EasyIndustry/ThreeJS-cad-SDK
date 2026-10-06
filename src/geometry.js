@@ -457,6 +457,79 @@ export class Transform {
 // ---------------------------------------------------------------------------------------
 
 /**
+ * Una malla de triángulos: la forma que resulta de una pieza (el bruto con sus operaciones).
+ * `positions` son las coordenadas x, y, z de cada vértice, una detrás de otra; `indices`, de a
+ * tres, los vértices de cada triángulo, en sentido antihorario visto desde afuera. Es un valor:
+ * `transform(t)` devuelve otra.
+ */
+export class Mesh {
+  /** @param {{ positions: ArrayLike<number>, indices: ArrayLike<number> }} m */
+  constructor({ positions, indices }) {
+    const pos = Array.from(positions ?? []), idx = Array.from(indices ?? []);
+    if (pos.length % 3 || pos.some((v) => typeof v !== 'number' || !Number.isFinite(v))) throw new TypeError('malla inválida: positions va de a tres números (x, y, z)');
+    const n = pos.length / 3;
+    if (idx.length % 3 || idx.some((i) => !Number.isInteger(i) || i < 0 || i >= n)) throw new TypeError(`malla inválida: indices va de a tres, cada uno entre 0 y ${n - 1}`);
+    /** @readonly */ this.positions = Object.freeze(pos);
+    /** @readonly */ this.indices = Object.freeze(idx);
+    Object.freeze(this);
+  }
+
+  /** Una Mesh a partir de cualquier { positions, indices } (lo que devuelve un kernel, p. ej.). @param {{ positions: ArrayLike<number>, indices: ArrayLike<number> }} m */
+  static from(m) { return m instanceof Mesh ? m : new Mesh(m); }
+
+  get vertexCount() { return this.positions.length / 3; }
+  get triangleCount() { return this.indices.length / 3; }
+  /** El volumen que encierra (positivo si los triángulos miran hacia afuera). */
+  get volume() {
+    const p = this.positions, ix = this.indices;
+    let v = 0;
+    for (let k = 0; k < ix.length; k += 3) {
+      const a = ix[k] * 3, b = ix[k + 1] * 3, c = ix[k + 2] * 3;
+      v += p[a] * (p[b + 1] * p[c + 2] - p[b + 2] * p[c + 1]) - p[a + 1] * (p[b] * p[c + 2] - p[b + 2] * p[c]) + p[a + 2] * (p[b] * p[c + 1] - p[b + 1] * p[c]);
+    }
+    return v / 6;
+  }
+  get boundingBox() {
+    /** @type {Point3d[]} */
+    const pts = [];
+    for (let k = 0; k < this.positions.length; k += 3) pts.push(new Point3d(this.positions[k], this.positions[k + 1], this.positions[k + 2]));
+    return BoundingBox.fromPoints(pts);
+  }
+  /** @param {Transform} t */
+  transform(t) {
+    const f = Transform.check(t).frame;
+    /** @type {number[]} */
+    const pos = [];
+    for (let k = 0; k < this.positions.length; k += 3) pos.push(...applyFrame(f, [this.positions[k], this.positions[k + 1], this.positions[k + 2]]));
+    return new Mesh({ positions: pos, indices: this.indices });
+  }
+  toString() { return `Mesh: ${this.triangleCount} triángulos, volumen ${fmt(this.volume)}`; }
+
+  /** @param {{ print?: boolean }} [opts] */
+  static help(opts) { return help('Mesh — una malla de triángulos: la forma que resulta de una pieza', Mesh.members, opts); }
+  /** @param {{ print?: boolean }} [opts] */
+  help(opts) { return Mesh.help(opts); }
+
+  /** @type {Member[]} */
+  static members = [
+    ['new Mesh({ positions, indices })', 'una malla nueva'],
+    ['positions', 'x, y, z de cada vértice, uno detrás de otro'],
+    ['indices', 'de a tres: los vértices de cada triángulo, antihorario visto desde afuera'],
+    ['static from(m)', 'una Mesh a partir de cualquier { positions, indices }'],
+    ['vertexCount', 'cuántos vértices tiene'],
+    ['triangleCount', 'cuántos triángulos tiene'],
+    ['volume', 'el volumen que encierra'],
+    ['boundingBox', 'la caja que la encierra'],
+    ['transform(t)', 'la malla transformada (devuelve una nueva)'],
+    ['toString()', 'para leer'],
+    ['help()', 'esta tabla'],
+    ['static help()', 'esta tabla, sin crear una instancia'],
+  ];
+}
+
+// ---------------------------------------------------------------------------------------
+
+/**
  * Dónde se tocan dos piezas que no se meten una en otra (ver contact.js). `kind` dice qué
  * se toca: 'face' (dos caras enfrentadas: `points` es el polígono donde se solapan, con su
  * área — ahí va la cola o el tornillo), 'edge' (una arista apoyada: `points` son sus dos
