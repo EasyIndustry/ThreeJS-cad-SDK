@@ -25,6 +25,7 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { toColumns4 } from '../../src/frame.js';
+import { convertLength } from '../../src/units.js';
 
 /** @typedef {ReturnType<typeof import('../../src/index.js').createWorkshop>} Workshop */
 /** @typedef {import('../../src/model.js').PieceDef} PieceDef */
@@ -42,6 +43,8 @@ const GRIS_NEUTRO = '#9a9a92';
  */
 export function createThreeView(workshop, { scene, geometryFor, materialFor, colors = {} }) {
   const model = workshop.model;
+  // los tamaños de las ayudas (ejes, tubos, etiquetas) están pensados en cm: se llevan a la unidad del documento
+  const u = convertLength(1, 'cm', model.units);
   const col = { edge: '#3b2a1e', highlight: '#d6461f', contact: '#2e9a5c', collision: '#d6461f', ...colors };
   const geo = geometryFor || ((/** @type {PieceDef} */ p) => new THREE.BoxGeometry(p.size[0], p.size[1], p.size[2]));
   const mat = materialFor || (() => new THREE.MeshStandardMaterial({ color: GRIS_NEUTRO, roughness: 0.8 }));
@@ -108,7 +111,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
       const caja = model.box(id, 'world');
       const ensamble = p.kind === 'assembly';
       if (ver.axes) {
-        const ejes = new THREE.AxesHelper(Math.max(8, Math.min(40, Math.max(...caja.size) * 0.35)));
+        const ejes = new THREE.AxesHelper(Math.max(8 * u, Math.min(40 * u, Math.max(...caja.size) * 0.35)));
         ejes.matrixAutoUpdate = false;
         ejes.matrix.fromArray(toColumns4(model.worldFrame(id)));
         capas.add(ejes);
@@ -121,7 +124,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
         div.className = ensamble ? 'cad-label cad-label--assembly' : 'cad-label';
         div.textContent = `${id} · ${p.name}`;
         const o = new CSS2DObject(div);
-        o.position.set(caja.center[0], ensamble ? caja.max[1] + 4 : caja.center[1], caja.center[2]);
+        o.position.set(caja.center[0], ensamble ? caja.max[1] + 4 * u : caja.center[1], caja.center[2]);
         capas.add(o);
       }
     }
@@ -150,7 +153,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
   /** @param {{ x: number, y: number, z: number }} a @param {{ x: number, y: number, z: number }} b @param {string} color */
   function tubo(a, b, color) {
     const A = new THREE.Vector3(a.x, a.y, a.z), B = new THREE.Vector3(b.x, b.y, b.z);
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, A.distanceTo(B), 12), new THREE.MeshBasicMaterial({ color, depthTest: false }));
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.5 * u, 0.5 * u, A.distanceTo(B), 12), new THREE.MeshBasicMaterial({ color, depthTest: false }));
     m.position.copy(A).add(B).multiplyScalar(0.5);
     m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), B.clone().sub(A).normalize());
     m.renderOrder = 10;
@@ -158,7 +161,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
   }
   /** @param {{ x: number, y: number, z: number }} a @param {string} color */
   function punto(a, color) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color, depthTest: false }));
+    const m = new THREE.Mesh(new THREE.SphereGeometry(u, 16, 12), new THREE.MeshBasicMaterial({ color, depthTest: false }));
     m.position.set(a.x, a.y, a.z);
     m.renderOrder = 10;
     return m;

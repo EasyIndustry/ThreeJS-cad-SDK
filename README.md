@@ -196,6 +196,34 @@ de adentro sigue valiendo cuando el conjunto se mueve.
 Y para una selección suelta que no tiene que persistir, alcanza con un array:
 `Transform.apply(t, [a, b, c])`.
 
+## Unidades y tolerancias
+
+El SDK no sabe de centímetros: una medida es un número en la **unidad del documento**, que se
+elige al crearlo y viaja con él al guardarlo.
+
+```js
+const a = createWorkshop();                       // cm, si no se dice otra
+const b = createWorkshop({ units: 'mm' });        // 'mm' | 'cm' | 'm' | 'in' | 'ft'
+b.units;                                          // 'mm'
+b.tolerances;                                     // { touch: 2, penetration: 1.5 }, en mm
+createWorkshop({ units: 'in' }).tolerances;       // { touch: 0.0625, penetration: 0.046875 }, en pulgadas
+```
+
+- **Cada unidad pertenece a un sistema** (`mm`, `cm`, `m`: métrico; `in`, `ft`: imperial), y de él
+  salen los valores sugeridos.
+- **Los valores sugeridos viven en [`src/config.js`](src/config.js)**, y solo ahí (una prueba lo hace
+  cumplir). Están escritos en la unidad natural de cada sistema —2 mm y 1,5 mm; 1/16 in y 3/64 in—
+  y se llevan a la unidad del documento, así que la misma escena física da las mismas respuestas
+  en mm, en cm, en m o en pulgadas. Para otro criterio se cambia ese archivo, o se pisa desde
+  afuera con `createWorkshop({ tolerances: { touch, penetration } })`.
+- **Un documento guardado trae su unidad.** Al cargarlo (`load`), la del documento manda; uno
+  guardado antes de que se guardara la unidad era de cm, que era lo único que había.
+- **No hay conversión automática del contenido:** cambiar la unidad de un documento que ya tiene
+  piezas no es cambiar un campo, es reescalar sus números. `convertLength(valor, de, a)` está para
+  hacerlo a mano.
+- Las ayudas visuales del adaptador de three (ejes, tubos de contacto, etiquetas) se escalan con la
+  unidad.
+
 ## Instancias y matrices
 
 Una **instancia** es la misma pieza o el mismo ensamble colocado otra vez. Es lo que en Rhino
@@ -265,14 +293,14 @@ const e = taller.assemble([cubo, otro], { name: 'Marco' });
 e.duplicate().move([0, 0, 80]);
 ```
 
-Medidas en cm, ángulos en grados. Lo completo de cada clase está en su `help()`, que es la
+Las medidas son números en la unidad del documento (ver [Unidades y tolerancias](#unidades-y-tolerancias)); los ángulos, en grados. Lo completo de cada clase está en su `help()`, que es la
 fuente de verdad (y está verificada): `taller.help()`, `Piece.help()`, `Assembly.help()`,
 `Point3d.help()`, `Vector3d.help()`, `Line.help()`, `BoundingBox.help()`, `Face.help()`,
 `Transform.help()`.
 
 ### Contacto e intersección
 
-Tres preguntas distintas, porque en carpintería son tres cosas distintas:
+Tres preguntas distintas, porque en un ensamble son tres cosas distintas:
 
 | | |
 |---|---|
@@ -283,17 +311,19 @@ Tres preguntas distintas, porque en carpintería son tres cosas distintas:
 | `taller.contacts()` · `taller.collisions()` | todos, en el documento |
 | `e.contactsWith(e)` | un ensamble contra sí mismo: sus uniones internas |
 
-Las tolerancias por defecto están pensadas para carpintería: se tocan a **0,2 cm** o menos
-(`TOUCH`) y chocan si se meten más de **0,15 cm** (`PEN`). Las dos se pueden pedir:
-`a.touches(b, { tolerance: 0.05 })`.
+Se tocan si están a `taller.tolerances.touch` o menos, y chocan si se meten más de
+`taller.tolerances.penetration`. Esos valores no están escritos en el código: salen de
+[`src/config.js`](src/config.js), según la unidad del documento (ver más abajo). Se pueden pisar
+para una pregunta (`a.touches(b, { tolerance: 0.05 })`, en la unidad del documento) o para todo el
+taller (`createWorkshop({ tolerances: { touch: 0.05 } })`).
 
 Funciona con piezas giradas como estén: son cajas orientadas, no alineadas al mundo (que
 para una pieza girada son más grandes que la pieza). El teorema de los ejes separadores (los
 15 ejes) dice si chocan y cuánto, y el recorte de polígonos dice dónde.
 
-En el laboratorio, el botón **Contactos** (o `cad.show.contacts()`) pinta de verde donde se
-tocan y de rojo donde se meten. La demo tiene un choque que nadie había visto cuando se
-escribió: la diagonal de 80 cm no entra entre los largueros y se mete 2,1 cm en cada uno.
+El adaptador de three, con `vista.show.contacts(true)`, pinta de verde donde se tocan y de rojo
+donde se meten. La demo (`examples/demo.js`) tiene un choque que nadie había visto cuando se
+escribió: la diagonal de 80 no entra entre los largueros y se mete 2,1 en cada uno.
 
 ### Por qué la pieza se llama `Piece` y no `Box`
 

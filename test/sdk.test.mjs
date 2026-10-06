@@ -10,8 +10,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createWorkshop, Part, Piece, Assembly, Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, WORKSHOP_MEMBERS,
-  arrayTransforms,
+  arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, tolerancesFor,
 } from '../src/index.js';
+import * as sdk from '../src/index.js';
 import { Model } from '../src/model.js';
 import { memberNames } from '../src/help.js';
 import * as F from '../src/frame.js';
@@ -889,11 +890,103 @@ test('arrayTransforms: errores claros', () => {
   assert.throws(() => arrayTransforms(null), /la matriz va como/);
 });
 
+// ---------- unidades y tolerancias ----------
+// Las medidas son números en la unidad del documento, y las tolerancias salen de config.js
+// (sugeridas por sistema, en su unidad natural) llevadas a esa unidad.
+
+const POR_CM = { mm: 10, cm: 1, m: 0.01, in: 1 / 2.54, ft: 1 / 30.48 }; // cuánto vale 1 cm en cada unidad
+
+test('las tolerancias sugeridas salen de config.js y se llevan a la unidad del documento', () => {
+  assert.equal(createWorkshop().units, 'cm', 'sin decir nada, cm');
+  assert.deepEqual({ ...createWorkshop().tolerances }, { touch: 0.2, penetration: 0.15 }, 'y lo de siempre');
+  const de = (units) => Object.values(createWorkshop({ units }).tolerances);
+  cerca(de('mm'), [2, 1.5], 1e-12);
+  cerca(de('m'), [0.002, 0.0015], 1e-12);
+  cerca(de('in'), [1 / 16, 3 / 64], 1e-12, 'imperial: en fracciones de pulgada, no en un 0,0787 que nadie dice');
+  cerca(de('ft'), [1 / 192, 3 / 768], 1e-12);
+  assert.deepEqual(TOLERANCE_PRESETS.metric.unit, 'mm');
+  assert.deepEqual(TOLERANCE_PRESETS.imperial.unit, 'in');
+});
+
+test('la misma escena física da las mismas respuestas en cualquier unidad', () => {
+  // dos tablas de 40 × 2 × 30 cm; la de arriba separada `hueco` cm de la de abajo (negativo: metida)
+  const escena = (units, hueco) => {
+    const k = POR_CM[units];
+    const t = createWorkshop({ units });
+    const a = t.addPiece({ size: [40 * k, 2 * k, 30 * k], center: [0, 1 * k, 0] });
+    const b = t.addPiece({ size: [40 * k, 2 * k, 30 * k], center: [0, (3 + hueco) * k, 0] });
+    return { toca: a.touches(b), choca: a.intersects(b), contactos: t.contacts().length, choques: t.collisions().length };
+  };
+  const esperado = {
+    0.1: { toca: true, choca: false, contactos: 1, choques: 0 },    // a 1 mm: se tocan
+    0.3: { toca: false, choca: false, contactos: 0, choques: 0 },   // a 3 mm: no
+    [-0.1]: { toca: true, choca: false, contactos: 1, choques: 0 }, // metida 1 mm: todavía un contacto
+    [-0.2]: { toca: false, choca: true, contactos: 0, choques: 1 }, // metida 2 mm: choque
+  };
+  for (const units of Object.keys(UNITS)) {
+    for (const [hueco, r] of Object.entries(esperado)) assert.deepEqual(escena(units, Number(hueco)), r, `${units}, hueco ${hueco} cm`);
+  }
+});
+
+test('las tolerancias se pisan al crear el taller, y una tolerancia puntual gana', () => {
+  const t = createWorkshop({ units: 'mm', tolerances: { touch: 5 } });
+  assert.deepEqual({ ...t.tolerances }, { touch: 5, penetration: 1.5 }, 'lo no pisado sigue siendo lo sugerido');
+  const a = t.addPiece({ size: [400, 20, 300], center: [0, 10, 0] });
+  const b = t.addPiece({ size: [400, 20, 300], center: [0, 34, 0] });          // a 4 mm
+  assert.ok(a.touches(b), 'con touch 5, a 4 mm se tocan');
+  assert.ok(!a.touches(b, { tolerance: 3 }), 'una tolerancia puntual va en la unidad del documento y gana');
+  assert.equal(t.contacts({ tolerance: 3 }).length, 0);
+  assert.equal(t.contacts().length, 1);
+});
+
+test('unidades y tolerancias inválidas fallan al crear, con un mensaje claro', () => {
+  assert.throws(() => createWorkshop({ units: 'furlong' }), /unidad inválida: furlong/);
+  assert.throws(() => createWorkshop({ tolerances: { touch: -1 } }), /tolerancia touch inválida/);
+  assert.throws(() => createWorkshop({ tolerances: { penetration: 'poco' } }), /tolerancia penetration inválida/);
+  assert.throws(() => convertLength(1, 'cm', 'milla'), /unidad inválida/);
+  assert.throws(() => convertLength('1', 'cm', 'mm'), /longitud inválida/);
+});
+
+test('la unidad viaja con el documento: se guarda, se carga, y un documento viejo es de cm', () => {
+  const t = createWorkshop({ units: 'mm' });
+  t.addPiece({ size: [400, 20, 300] });
+  const json = JSON.parse(JSON.stringify(t.toJSON()));
+  assert.equal(json.units, 'mm');
+  const u = createWorkshop();                      // se crea en cm...
+  u.load(json);                                    // ...y el documento manda
+  assert.equal(u.units, 'mm');
+  assert.equal(u.tolerances.touch, 2, 'las tolerancias siguen a la unidad cargada');
+  assert.equal(JSON.stringify(u.toJSON()), JSON.stringify(json));
+  u.clear();
+  assert.equal(u.units, 'mm', 'vaciar el documento no le cambia la unidad');
+  const viejo = { version: 2, counters: { piece: 0, assembly: 0, instance: 0 }, parts: [] };
+  u.load(viejo);
+  assert.equal(u.units, 'cm', 'antes de guardar la unidad, todo era cm');
+  assert.throws(() => u.load({ units: 'milla', counters: {}, parts: [] }), /unidad inválida/);
+  assert.equal(u.units, 'cm', 'un documento inválido no deja nada a medias');
+});
+
+test('config.js: tolerancesFor lleva lo sugerido a la unidad pedida, y convertLength convierte', () => {
+  cerca([convertLength(25.4, 'mm', 'in'), convertLength(1, 'ft', 'in'), convertLength(1, 'm', 'cm')], [1, 12, 100], 1e-12);
+  assert.deepEqual({ ...tolerancesFor('cm', { penetration: 0.5 }) }, { touch: 0.2, penetration: 0.5 });
+  assert.ok(Object.isFrozen(tolerancesFor('mm')) && Object.isFrozen(TOLERANCE_PRESETS) && Object.isFrozen(UNITS));
+});
+
+test('las tolerancias viven solo en config.js: el resto del SDK no las escribe a mano', async () => {
+  const { readFile, readdir } = await import('node:fs/promises');
+  for (const f of (await readdir(new URL('../src/', import.meta.url))).filter((n) => n.endsWith('.js') && n !== 'config.js')) {
+    const src = await readFile(new URL(`../src/${f}`, import.meta.url), 'utf8');
+    const sin = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    assert.doesNotMatch(sin, /\b(TOUCH|PEN)\b|(?<![\w.])0\.(15|2)\b/, `src/${f} escribe una tolerancia a mano: va en config.js`);
+  }
+  assert.ok(!('TOUCH' in sdk) && !('PEN' in sdk), 'ya no se exportan constantes de tolerancia en cm');
+});
+
 // ---------- que el SDK siga siendo puro ----------
 
 test('el SDK no depende de ningún paquete externo ni del navegador (lo puede usar el servidor)', async () => {
   const { readFile } = await import('node:fs/promises');
-  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/index.js', 'examples/demo.js']) {
+  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/units.js', 'src/config.js', 'src/index.js', 'examples/demo.js']) {
     const src = await readFile(new URL(`../${f}`, import.meta.url), 'utf8');
     const sin = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
     const ext = [...sin.matchAll(/^\s*(?:import|export)[^'"]*?from\s*['"]([^'"]+)['"]/gm)]

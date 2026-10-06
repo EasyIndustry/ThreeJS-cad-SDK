@@ -25,11 +25,13 @@
 // después se expone acá — con su línea en la tabla de help(), que una prueba exige.
 import { Model } from './model.js';
 import { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, vec3 } from './geometry.js';
-import { obbOf, satDepth, intersectBoxes, contactsOf, candidatePairs, TOUCH, PEN } from './contact.js';
+import { obbOf, satDepth, intersectBoxes, contactsOf, candidatePairs } from './contact.js';
 import { arrayTransforms } from './array.js';
+import { UNITS, convertLength } from './units.js';
+import { TOLERANCE_PRESETS, tolerancesFor } from './config.js';
 import { help } from './help.js';
 
-export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, TOUCH, PEN, arrayTransforms };
+export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, tolerancesFor };
 
 /** @typedef {import('./model.js').Space} Space */
 /** @typedef {import('./geometry.js').PointLike} PointLike */
@@ -37,8 +39,10 @@ export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Interse
 /** @typedef {import('./geometry.js').AxisLike} AxisLike */
 /** @typedef {import('./help.js').Member} Member */
 /** @typedef {import('./array.js').ArraySpec} ArraySpec */
+/** @typedef {import('./units.js').Unit} Unit */
+/** @typedef {import('./config.js').Tolerances} Tolerances */
 
-/** @typedef {{ model: Model, part: (id: string) => Part, forget: (ids: string[]) => void }} Ctx */
+/** @typedef {{ model: Model, part: (id: string) => Part, forget: (ids: string[]) => void, tolerances: () => Readonly<Tolerances> }} Ctx */
 /** El documento al que pertenece cada parte, sin colgárselo a la parte a la vista. @type {WeakMap<Part, Ctx>} */
 const ctxOf = new WeakMap();
 /** @param {Part} p */
@@ -53,16 +57,16 @@ const piezasDe = (m, id) => m.piecesOf(id).map((p) => p.id);
 
 /**
  * Los contactos entre las piezas de dos grupos (cada par una vez). Un par que se mete uno
- * en otro no cuenta como contacto: eso es una intersección.
- * @param {Model} m @param {string[]} as @param {string[]} bs @param {number} tol
+ * en otro (más de `pen`) no cuenta como contacto: eso es una intersección.
+ * @param {Model} m @param {string[]} as @param {string[]} bs @param {number} tol @param {number} pen
  */
-function contactos(m, as, bs, tol) {
+function contactos(m, as, bs, tol, pen) {
   /** @type {Contact[]} */
   const out = [];
   for (const [x, y] of candidatePairs(m, as, bs, tol)) {
     const A = obbOf(m, x), B = obbOf(m, y);
     const depth = satDepth(A, B);
-    if (depth < -tol || depth > PEN) continue;
+    if (depth < -tol || depth > pen) continue;
     for (const c of contactsOf(A, B, tol)) {
       out.push(new Contact({ kind: c.kind, a: x, b: y, points: c.points, area: c.area, normal: c.normal, faceA: caraLocal(c.faceA), faceB: caraLocal(c.faceB) }));
     }
@@ -195,19 +199,22 @@ export class Part {
   // Entre las piezas de esta parte y las de la otra. Una parte contra sí misma da lo que
   // pasa adentro: e.contactsWith(e) son las uniones entre las piezas de un ensamble.
 
-  /** ¿Se toca con la otra (a `tolerance` cm o menos), sin meterse? @param {Part | string} other @param {{ tolerance?: number }} [opts] */
-  touches(other, { tolerance = TOUCH } = {}) { return this.contactsWith(other, { tolerance }).length > 0; }
-  /** ¿Se mete en la otra más de `tolerance` cm? @param {Part | string} other @param {{ tolerance?: number }} [opts] */
-  intersects(other, { tolerance = PEN } = {}) { return this.intersectionsWith(other, { tolerance }).length > 0; }
+  // `tolerance`, si se pasa, va en la unidad del documento; si no, la del taller (`taller.tolerances`).
+
+  /** ¿Se toca con la otra (a `tolerance` o menos), sin meterse? @param {Part | string} other @param {{ tolerance?: number }} [opts] */
+  touches(other, { tolerance } = {}) { return this.contactsWith(other, { tolerance }).length > 0; }
+  /** ¿Se mete en la otra más de `tolerance`? @param {Part | string} other @param {{ tolerance?: number }} [opts] */
+  intersects(other, { tolerance } = {}) { return this.intersectionsWith(other, { tolerance }).length > 0; }
   /** Dónde se toca con la otra. @param {Part | string} other @param {{ tolerance?: number }} [opts] */
-  contactsWith(other, { tolerance = TOUCH } = {}) {
-    const m = ctx(this).model;
-    return contactos(m, piezasDe(m, this.id), piezasDe(m, idDe(other)), tolerance);
+  contactsWith(other, { tolerance } = {}) {
+    const { model: m, tolerances } = ctx(this);
+    const t = tolerances();
+    return contactos(m, piezasDe(m, this.id), piezasDe(m, idDe(other)), tolerance ?? t.touch, t.penetration);
   }
   /** Lo que comparte de volumen con la otra. @param {Part | string} other @param {{ tolerance?: number }} [opts] */
-  intersectionsWith(other, { tolerance = PEN } = {}) {
-    const m = ctx(this).model;
-    return intersecciones(m, piezasDe(m, this.id), piezasDe(m, idDe(other)), tolerance);
+  intersectionsWith(other, { tolerance } = {}) {
+    const { model: m, tolerances } = ctx(this);
+    return intersecciones(m, piezasDe(m, this.id), piezasDe(m, idDe(other)), tolerance ?? tolerances().penetration);
   }
 
   toString() { return `${this.kind === 'piece' ? 'Piece' : 'Assembly'} ${this.id} «${this.name}»`; }
@@ -234,8 +241,8 @@ export class Part {
     ['detach()', 'soltar una instancia: pasa a ser una parte de verdad, que ya no sigue a su fuente'],
     ['rename(name)', 'cambiarle el nombre'],
     ['remove()', 'borrarla, con todo lo que cuelga de ella'],
-    ['touches(other, { tolerance? })', '¿se toca con la otra sin meterse? (a 0,2 cm o menos)'],
-    ['intersects(other, { tolerance? })', '¿se mete en la otra? (más de 0,15 cm)'],
+    ['touches(other, { tolerance? })', '¿se toca con la otra sin meterse? (a tolerances.touch o menos)'],
+    ['intersects(other, { tolerance? })', '¿se mete en la otra? (más de tolerances.penetration)'],
     ['contactsWith(other, { tolerance? })', 'dónde se toca con la otra (Contact). Con ella misma: sus uniones internas'],
     ['intersectionsWith(other, { tolerance? })', 'lo que comparte de volumen con la otra (Intersection)'],
     ['toString()', 'para leer'],
@@ -244,7 +251,7 @@ export class Part {
 }
 
 export class Piece extends Part {
-  /** Sus medidas en su marco local, sobre x, y, z (cm). */
+  /** Sus medidas en su marco local, sobre x, y, z (en la unidad del documento). */
   get size() {
     const s = ctx(this).model.piece(this.id).size;
     return Object.freeze({ x: s[0], y: s[1], z: s[2] });
@@ -318,14 +325,23 @@ export class Assembly extends Part {
 
 /**
  * Un documento: el árbol de partes y la puerta de entrada a todo lo demás.
- * @param {Model} [model]
+ *
+ * `units`: la unidad de todas las medidas (mm, cm, m, in o ft; cm si no se dice). Es un dato
+ * del documento: se guarda con él, y un documento cargado trae la suya.
+ * `tolerances`: pisa las tolerancias que sugiere config.js para esa unidad, en esa unidad.
+ * También se puede pasar un `Model` ya armado en lugar de las opciones.
+ * @param {Model | { units?: Unit, tolerances?: Partial<Tolerances> }} [init]
  */
-export function createWorkshop(model = new Model()) {
+export function createWorkshop(init = {}) {
+  const model = init instanceof Model ? init : new Model({ units: init.units });
+  const override = init instanceof Model ? {} : init.tolerances ?? {};
+  tolerancesFor(model.units, override); // que un valor inválido falle al crear, no en la primera pregunta
   /** @type {Map<string, Part>} */
   const cache = new Map();
   /** @type {Ctx} */
   const c = {
     model,
+    tolerances: () => tolerancesFor(model.units, override),
     part(id) {
       const kind = model.get(id).kind; // que falle acá, con un mensaje claro, si no existe
       let h = cache.get(id);
@@ -365,7 +381,7 @@ export function createWorkshop(model = new Model()) {
      * Una pieza nueva.
      * @param {{ name?: string, size: PointLike, material?: string, shape?: object | null,
      *           center?: PointLike, placement?: Transform, axes?: { length: 0|1|2, width: 0|1|2, thickness: 0|1|2 } }} spec
-     *   size: largo de cada eje local, en cm. center: dónde queda su centro (el origen si no se dice).
+     *   size: largo de cada eje local, en la unidad del documento. center: dónde queda su centro (el origen si no se dice).
      *   placement: la orienta al crearla, en vez de crearla derecha y girarla después (p. ej.
      *   `Transform.fromEuler([rx, ry, rz])`, para importar un diseño que guarda Euler).
      *   axes: cuál eje local es el largo, el ancho y el espesor; por tamaño si no se dice.
@@ -400,15 +416,20 @@ export function createWorkshop(model = new Model()) {
     part(id) { return c.part(id); },
     get parts() { return Object.freeze([...model.parts.keys()].map((id) => c.part(id))); },
     get roots() { return Object.freeze(model.roots().map((p) => c.part(p.id))); },
+    /** La unidad de todas las medidas del documento. */
+    get units() { return model.units; },
+    /** Las tolerancias en uso, en la unidad del documento: las sugeridas para ella (config.js) y lo que se haya pisado. */
+    get tolerances() { return c.tolerances(); },
     /** Todos los contactos entre piezas del documento. @param {{ tolerance?: number }} [opts] */
-    contacts({ tolerance = TOUCH } = {}) {
+    contacts({ tolerance } = {}) {
       const ps = model.allPieces().map((p) => p.id);
-      return contactos(model, ps, ps, tolerance);
+      const t = c.tolerances();
+      return contactos(model, ps, ps, tolerance ?? t.touch, t.penetration);
     },
     /** Todas las piezas que se meten unas en otras. @param {{ tolerance?: number }} [opts] */
-    collisions({ tolerance = PEN } = {}) {
+    collisions({ tolerance } = {}) {
       const ps = model.allPieces().map((p) => p.id);
-      return intersecciones(model, ps, ps, tolerance);
+      return intersecciones(model, ps, ps, tolerance ?? c.tolerances().penetration);
     },
     tree() { return model.tree(); },
     /** @param {(ev: { type: string, ids: string[] }) => void} fn */
@@ -416,7 +437,7 @@ export function createWorkshop(model = new Model()) {
     toJSON() { return model.toJSON(); },
     /** @param {any} data */
     load(data) { cache.clear(); model.load(data); },
-    clear() { cache.clear(); model.load({ counters: {}, parts: [] }); },
+    clear() { cache.clear(); model.load({ units: model.units, counters: {}, parts: [] }); },
     /** @param {{ print?: boolean }} [opts] */
     help(opts) { return help('Workshop — el documento: crear, buscar y guardar partes', WORKSHOP_MEMBERS, opts); },
   };
@@ -425,13 +446,15 @@ export function createWorkshop(model = new Model()) {
 
 /** @type {Member[]} */
 export const WORKSHOP_MEMBERS = [
-  ['addPiece({ name?, size, material?, shape?, center?, placement?, axes? })', 'una pieza nueva: size en cm sobre sus ejes locales; placement (Transform) la orienta al crearla; axes fuerza cuál eje es el largo, el ancho y el espesor'],
+  ['addPiece({ name?, size, material?, shape?, center?, placement?, axes? })', 'una pieza nueva: size en la unidad del documento sobre sus ejes locales; placement (Transform) la orienta al crearla; axes fuerza cuál eje es el largo, el ancho y el espesor'],
   ['assemble(parts, { name? })', 'un ensamble con esas partes hermanas; se anida, no se aplasta'],
   ['instantiate(part, { name?, parent?, placement? })', 'una instancia: la misma parte colocada otra vez; editar la fuente cambia todas'],
   ['array(part, spec)', "repetir una parte en línea, en área o alrededor de un eje: crea instancias (ver arrayTransforms)"],
   ['part(id)', 'una parte por su id'],
   ['parts', 'todas las partes'],
   ['roots', 'las partes de primer nivel (las que no están en un ensamble)'],
+  ['units', "la unidad de todas las medidas del documento: 'mm', 'cm', 'm', 'in' o 'ft'"],
+  ['tolerances', 'las tolerancias en uso, en esa unidad: { touch, penetration } (ver config.js)'],
   ['contacts({ tolerance? })', 'todos los contactos entre piezas (Contact)'],
   ['collisions({ tolerance? })', 'todas las piezas que se meten unas en otras (Intersection)'],
   ['tree()', 'el árbol de partes, como texto'],

@@ -4,6 +4,40 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 según [SemVer](https://semver.org): mientras sea `0.x`, una versión menor puede romper algo,
 y si rompe queda dicho arriba de todo en esa entrada (ver `CONTRIBUTING.md`).
 
+## [0.5.0] - 2026-10-06
+
+Unidades y tolerancias: nada del SDK asume centímetros, y las tolerancias salen de un archivo
+de configuración.
+
+### Breaking
+
+- **Se sacaron `TOUCH` y `PEN`** (las constantes de tolerancia, que eran 0,2 y 0,15 cm). Ahora
+  la tolerancia sale de `taller.tolerances` (`{ touch, penetration }`), según la unidad del
+  documento. Con la unidad por defecto (cm) los valores son los mismos de antes: 0,2 y 0,15.
+  Quien importaba las constantes tiene que leer `taller.tolerances`.
+- Los textos de `help()` y de `toString()` de `Contact` e `Intersection` ya no dicen "cm" ni
+  "cm²/cm³": dicen "unidades del documento".
+
+### Added
+
+- `createWorkshop({ units, tolerances })`: `units` es `'mm' | 'cm' | 'm' | 'in' | 'ft'` (cm si no
+  se dice); `tolerances` pisa lo sugerido, en la unidad del documento. También sigue
+  aceptando un `Model` ya armado.
+- `taller.units` y `taller.tolerances`.
+- `src/units.js` (`UNITS`, `convertLength`) y `src/config.js` (`TOLERANCE_PRESETS`,
+  `tolerancesFor`): los valores sugeridos viven solo en `config.js`, escritos en la unidad
+  natural de cada sistema (métrico: 2 mm y 1,5 mm; imperial: 1/16 in y 3/64 in). Una prueba
+  impide que vuelvan a aparecer fuera de ese archivo.
+- La unidad viaja con el documento: `toJSON()` escribe `version: 3` y `units`; `load()` toma la
+  unidad del documento (uno anterior se carga como cm) y `clear()` la conserva.
+
+### Changed
+
+- El umbral con que se descarta una cara de contacto "astilla" ya no es un `1e-6` en cm²: es
+  1/200 de la tolerancia de contacto al cuadrado, que da lo mismo en cm y escala bien en
+  otras unidades.
+- Las ayudas visuales del adaptador de three se escalan con la unidad del documento.
+
 ## [0.4.0] - 2026-10-06
 
 Responde a [#3](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/3): instanciar una
@@ -11,7 +45,7 @@ parte, y matrices de piezas y de ensambles.
 
 ### Changed
 
-- `toJSON()` escribe `version: 2` (puede traer partes `kind: 'instance'`). `load()` sigue
+- `toJSON()` escribe `version: 2` (en 0.5.0 pasó a 3, ver arriba; puede traer partes `kind: 'instance'`). `load()` sigue
   leyendo documentos de la versión 1 sin cambios. Un documento con instancias no lo lee una
   versión anterior del SDK.
 - `taller.contacts()` y `taller.collisions()` incluyen las piezas de adentro de las
@@ -85,6 +119,7 @@ Primera versión. El núcleo puro (documento, partes, marcos, geometría, contac
 intersección, con `help()` verificado por test) y el adaptador de three que espeja el
 modelo en una escena.
 
+[0.5.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.1.0...v0.2.0

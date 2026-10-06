@@ -17,6 +17,10 @@
 //
 // Toda la geometría se puede pedir en 'local' (el marco de la parte) o en 'world'.
 //
+// Las medidas son números en la UNIDAD DEL DOCUMENTO (`model.units`: mm, cm, m, in o ft; cm si
+// no se dice otra). Viaja con el documento al guardarlo, y de ella salen las tolerancias que
+// sugiere config.js.
+//
 // Lo que está adentro de una instancia no se guarda: se resuelve al pedirlo, con un id de
 // camino (`I-1/P-2`: la pieza P-2 de la fuente, tal como queda dentro de la instancia I-1).
 // Esas piezas "virtuales" se leen como cualquier otra (vértices, contacto), pero no se
@@ -25,12 +29,14 @@
 // Este módulo no importa nada de three ni del DOM: corre en Node y lo puede usar el
 // servidor. Lo prueba test/sdk.test.mjs.
 import { frame, compose, invert, apply, rotate, turn, transpose3, isQuarterTurn, axisIndex } from './frame.js';
+import { DEFAULT_UNIT, checkUnit } from './units.js';
 
 /** @typedef {import('./frame.js').Vec3} Vec3 */
 /** @typedef {import('./frame.js').Mat3} Mat3 */
 /** @typedef {import('./frame.js').Frame} Frame */
 /** @typedef {import('./frame.js').Axis} Axis */
 /** @typedef {'local' | 'world'} Space */
+/** @typedef {import('./units.js').Unit} Unit */
 
 /**
  * Qué eje LOCAL es el largo, el ancho y el espesor de una pieza. Se decide al crearla
@@ -46,7 +52,7 @@ import { frame, compose, invert, apply, rotate, turn, transpose3, isQuarterTurn,
  * @property {string} name
  * @property {string | null} parent
  * @property {Frame} frame       marco respecto del padre (o del mundo si es raíz)
- * @property {Vec3} size         medidas en cm, sobre los ejes locales x, y, z
+ * @property {Vec3} size         medidas en la unidad del documento, sobre los ejes locales x, y, z
  * @property {Axes} axes
  * @property {string} material
  * @property {object | null} shape  forma (perfil, torneado, corte)
@@ -125,7 +131,10 @@ function validate(parts) {
 }
 
 export class Model {
-  constructor() {
+  /** @param {{ units?: Unit }} [opts] `units`: la unidad del documento (cm si no se dice) */
+  constructor({ units = DEFAULT_UNIT } = {}) {
+    /** La unidad en que están todas las medidas del documento. @type {Unit} */
+    this.units = checkUnit(units);
     /** @type {Map<string, StoredPart>} */
     this.parts = new Map();
     /** @type {Record<string, number>} */
@@ -451,7 +460,7 @@ export class Model {
    */
   addPiece({ name, size, material = 'default', shape = null, at = [0, 0, 0], r, axes, parent = null }) {
     if (!Array.isArray(size) || size.length !== 3 || size.some((s) => !(s > 0))) {
-      throw new Error(`medidas inválidas: ${JSON.stringify(size)} (van tres números > 0, en cm)`);
+      throw new Error(`medidas inválidas: ${JSON.stringify(size)} (van tres números > 0, en ${this.units})`);
     }
     const id = this.nextId('piece');
     /** @type {PieceDef} */
@@ -647,7 +656,7 @@ export class Model {
 
   // ---------- colocar: solo tocan marcos, nunca una definición ----------
 
-  /** Corre la parte `delta` cm, medido en el mundo. @param {string} id @param {Vec3} delta */
+  /** Corre la parte `delta` (en la unidad del documento), medido en el mundo. @param {string} id @param {Vec3} delta */
   move(id, delta) {
     const p = this.own(id);
     const d = rotate(transpose3(this.parentWorld(p.parent).r), delta); // al espacio del padre
@@ -771,14 +780,20 @@ export class Model {
   // ---------- guardar ----------
 
   toJSON() {
-    return { version: 2, counters: { ...this.counters }, parts: [...this.parts.values()].map(clone) };
+    return { version: 3, units: this.units, counters: { ...this.counters }, parts: [...this.parts.values()].map(clone) };
   }
 
-  /** @param {{ counters: Record<string, number>, parts: StoredPart[] }} data */
+  /**
+   * Carga un documento. La unidad es la del documento: uno guardado antes de que se guardara la
+   * unidad estaba en cm, que era lo único que había.
+   * @param {{ units?: Unit, counters: Record<string, number>, parts: StoredPart[] }} data
+   */
   load(data) {
+    const units = checkUnit(data.units ?? 'cm');
     const parts = new Map(data.parts.map((p) => [p.id, /** @type {StoredPart} */ (clone(p))]));
     validate(parts);
     const ids = [...this.parts.keys()];
+    this.units = units;
     this.parts = parts;
     this.counters = { piece: 0, assembly: 0, instance: 0, ...data.counters };
     this.emit('load', [...ids, ...this.parts.keys()]);

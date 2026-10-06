@@ -15,6 +15,10 @@ cualquier CAD de piezas rígidas?".
   saber de dónde salió el pedido. Si un nombre, un default o una lista de valores posibles
   solo tiene sentido para quien lo pidió, es una señal de que hay que generalizarlo o de que
   no es de este repo.
+- **Los números que dependen de la unidad o del oficio van en `src/config.js`**, y solo ahí: ni
+  una tolerancia ni un valor "sugerido" se escribe a mano en el resto de `src/` (una prueba lo
+  hace cumplir). Un valor nuevo de ese tipo entra a `config.js`, en la unidad natural de cada
+  sistema, y se lleva a la unidad del documento con `convertLength`.
 - Un default también es superficie de API: un valor por defecto que asume el vocabulario de
   una sola industria (un color por tipo de madera, un material por defecto que es una
   especie de madera) es tan específico de una app como un método con su nombre.
@@ -58,7 +62,7 @@ frena si eso cambia: el núcleo lo puede usar un servidor.
 
 - La API puede cambiar entre versiones menores. Lo que cuenta como **cambio que rompe algo**:
   - cambiar o quitar la firma de un método o propiedad pública;
-  - cambiar un valor por defecto que afecta el resultado (una tolerancia, un default de
+  - cambiar un valor por defecto que afecta el resultado (un valor de `config.js`, un default de
     `material`, el color que sale si no se pasa `materialFor`);
   - quitar o renombrar una entrada de `help()`;
   - cambiar el formato de `toJSON()` sin una migración.

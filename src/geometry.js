@@ -9,7 +9,8 @@
 // Transform, y cualquier geometría sabe aplicarse uno. Transform.apply(t, [...]) lo aplica
 // a un array de lo que sea.
 //
-// Medidas en cm, ángulos en grados. Este módulo no importa three ni DOM.
+// Las medidas son números en la unidad del documento (`taller.units`); los ángulos, en grados.
+// Este módulo no importa three ni DOM.
 import { frame, compose, invert, apply as applyFrame, rotate as rotateVec, turn, isQuarterTurn, toEuler, fromEuler } from './frame.js';
 import { help } from './help.js';
 
@@ -76,7 +77,7 @@ export class Point3d {
   toString() { return `(${fmt(this.x)}, ${fmt(this.y)}, ${fmt(this.z)})`; }
 
   /** @param {{ print?: boolean }} [opts] */
-  static help(opts) { return help('Point3d — un punto en el espacio (cm)', Point3d.members, opts); }
+  static help(opts) { return help('Point3d — un punto en el espacio', Point3d.members, opts); }
   /** @param {{ print?: boolean }} [opts] */
   help(opts) { return Point3d.help(opts); }
 
@@ -150,7 +151,7 @@ export class Vector3d {
   toString() { return `<${fmt(this.x)}, ${fmt(this.y)}, ${fmt(this.z)}>`; }
 
   /** @param {{ print?: boolean }} [opts] */
-  static help(opts) { return help('Vector3d — una dirección con largo (cm)', Vector3d.members, opts); }
+  static help(opts) { return help('Vector3d — una dirección con largo', Vector3d.members, opts); }
   /** @param {{ print?: boolean }} [opts] */
   help(opts) { return Vector3d.help(opts); }
 
@@ -325,7 +326,7 @@ export class Face {
     ['center', 'su centro (Point3d)'],
     ['vertices', 'sus 4 esquinas, en orden'],
     ['edges', 'sus 4 aristas (Line)'],
-    ['area', 'su superficie, en cm²'],
+    ['area', 'su superficie, en unidades del documento al cuadrado'],
     ['transform(t)', 'la cara transformada (devuelve una nueva)'],
     ['toString()', 'para leer'],
     ['help()', 'esta tabla'],
@@ -492,7 +493,7 @@ export class Contact {
     });
   }
   toString() {
-    const que = this.kind === 'face' ? `cara, ${fmt(this.area)} cm²` : this.kind === 'edge' ? `arista de ${fmt(/** @type {Line} */ (this.line).length)} cm` : 'punto';
+    const que = this.kind === 'face' ? `cara, área ${fmt(this.area)}` : this.kind === 'edge' ? `arista de largo ${fmt(/** @type {Line} */ (this.line).length)}` : 'punto';
     return `${this.a} toca a ${this.b}: ${que}, en ${this.center}`;
   }
 
@@ -506,7 +507,7 @@ export class Contact {
     ['kind', "'face' (se tocan dos caras), 'edge' (una arista apoyada) o 'point' (un vértice)"],
     ['a  b', 'los ids de las dos piezas'],
     ['points', 'face: el polígono donde se solapan · edge: sus dos puntas · point: el punto'],
-    ['area', 'la superficie de contacto en cm² (0 si es arista o punto)'],
+    ['area', 'la superficie de contacto, en unidades del documento al cuadrado (0 si es arista o punto)'],
     ['normal', 'hacia dónde mira el contacto, de a hacia b (Vector3d)'],
     ['faceA  faceB', 'cuál cara de cada pieza, en la pieza: { localAxis, localSide } (null si no es de cara)'],
     ['center', 'el centro del contacto'],
@@ -543,7 +544,7 @@ export class Intersection {
       vertices: this.vertices.map((p) => p.transform(t)), faces: this.faces.map((f) => f.map((p) => p.transform(t))),
     });
   }
-  toString() { return `${this.a} se mete en ${this.b}: ${fmt(this.depth)} cm, ${fmt(this.volume)} cm³`; }
+  toString() { return `${this.a} se mete en ${this.b}: ${fmt(this.depth)} de profundidad, volumen ${fmt(this.volume)}`; }
 
   /** @param {{ print?: boolean }} [opts] */
   static help(opts) { return help('Intersection — dos piezas que se meten una en otra', Intersection.members, opts); }
@@ -553,8 +554,8 @@ export class Intersection {
   /** @type {Member[]} */
   static members = [
     ['a  b', 'los ids de las dos piezas'],
-    ['volume', 'el volumen compartido, en cm³'],
-    ['depth', 'cuánto se meten: lo mínimo que habría que correr una (cm)'],
+    ['volume', 'el volumen compartido, en unidades del documento al cubo'],
+    ['depth', 'cuánto se meten: lo mínimo que habría que correr una (en unidades del documento)'],
     ['vertices', 'los vértices del sólido compartido'],
     ['faces', 'sus caras, como polígonos de Point3d'],
     ['boundingBox', 'la caja que lo encierra'],
