@@ -19,7 +19,9 @@
 // La forma y el material de cada pieza los decide la app, si quiere, con dos ganchos:
 //   geometryFor(piece) → BufferGeometry en el marco LOCAL de la pieza, centrada en su origen
 //   materialFor(piece) → Material
-// Por defecto: una caja de sus medidas y un color por material.
+// Por defecto: una caja de sus medidas y un gris neutro para todas, sea cual sea su
+// `material`. El adaptador no conoce catálogos de materiales de ninguna app: eso es de
+// `materialFor`.
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { toColumns4 } from '../../src/frame.js';
@@ -27,7 +29,7 @@ import { toColumns4 } from '../../src/frame.js';
 /** @typedef {ReturnType<typeof import('../../src/index.js').createWorkshop>} Workshop */
 /** @typedef {import('../../src/model.js').PieceDef} PieceDef */
 
-const COLORES = { pino: '#d9b27a', roble: '#b88a58', nogal: '#7c5337', mdf: '#c7b597', 'melamina-blanca': '#ecebe5', guatambu: '#e3cf9d' };
+const GRIS_NEUTRO = '#9a9a92';
 
 /**
  * @param {Workshop} workshop
@@ -42,7 +44,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
   const model = workshop.model;
   const col = { edge: '#3b2a1e', highlight: '#d6461f', contact: '#2e9a5c', collision: '#d6461f', ...colors };
   const geo = geometryFor || ((/** @type {PieceDef} */ p) => new THREE.BoxGeometry(p.size[0], p.size[1], p.size[2]));
-  const mat = materialFor || ((/** @type {PieceDef} */ p) => new THREE.MeshStandardMaterial({ color: COLORES[/** @type {keyof typeof COLORES} */ (p.material)] || COLORES.pino, roughness: 0.8 }));
+  const mat = materialFor || (() => new THREE.MeshStandardMaterial({ color: GRIS_NEUTRO, roughness: 0.8 }));
 
   const root = new THREE.Group();
   root.name = 'threejs-cad-sdk';

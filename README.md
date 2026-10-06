@@ -37,7 +37,6 @@ src/                 el núcleo: modelo, marcos, geometría, contacto. Puro.
   help.js            help(): la ayuda de cada clase
 adapters/three/      el visor para three (opcional)
 examples/demo.js     un bastidor con una diagonal, ensamblado, girado y repetido
-lab/index.html       consola + visor para probarlo a mano, sin build
 test/                las pruebas, en Node
 ```
 
@@ -106,10 +105,8 @@ npm test             # las pruebas, en Node (sin navegador)
 npm run typecheck    # tsc estricto
 ```
 
-Y a mano: serví la carpeta del repo con cualquier servidor estático
-(`python3 -m http.server`) y abrí `lab/index.html`. Es una consola: escribís JavaScript
-contra el SDK y la escena se actualiza. `Tab` completa, `↑` trae lo anterior, y cada clase
-tiene su `help()`.
+El testeo visual, a mano, queda del lado de cada app que vendoriza el SDK: arma su propia
+escena con `adapters/three/viewer.js` (o lee `examples/demo.js` como punto de partida).
 
 ## La idea
 
@@ -171,23 +168,10 @@ modelo: lo mira desde el costado.
 
 ## El contrato: cómo se escribe una geometría
 
-Toda clase de geometría cumple esto, y las pruebas lo hacen cumplir:
-
-1. **Un solo verbo cambia la colocación: `transform(t)`.** Mover y girar son constructores
-   de `Transform` (`Transform.translation`, `Transform.rotation`) más un atajo en la
-   instancia (`move`, `rotate`). Por eso cualquier geometría sabe moverse igual.
-2. **La definición se cambia por métodos explícitos** (`resize`, `setMaterial`, `rename`),
-   nunca escribiendo sobre algo que devolvió una consulta.
-3. **Las consultas son propiedades y devuelven valores de solo lectura.** `cubo.vertices`
-   es un array congelado de `Point3d` congelados: `cubo.vertices[0].x` se lee, no se
-   escribe. Hay una prueba que intenta escribirlos y exige que falle.
-4. **Mundo por defecto, local en espejo:** `cubo.vertices` y `cubo.local.vertices`.
-5. **Cada clase declara sus miembros con una línea de descripción** (`static members`), y
-   de ahí salen `cubo.help()` y `Point3d.help()`. Una prueba exige que cada miembro público
-   esté en la tabla y que cada entrada de la tabla exista: agregar un método sin
-   documentarlo hace caer la prueba con el nombre del método.
-6. **Sin three, sin DOM.** Una prueba lo frena si pasa.
-7. **Nada entra sin su prueba en Node**, y recién después se expone.
+Toda clase de geometría sigue un contrato fijo (un solo verbo de colocación, consultas de
+solo lectura, `help()` verificado por test, sin three ni DOM en el núcleo) que las pruebas
+hacen cumplir. Está escrito completo, junto con el criterio de qué entra a este SDK y qué
+queda en la app que lo vendoriza, en [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 Dos clases de cosas, como en Rhino:
 
@@ -264,18 +248,10 @@ en el CAD: no es una caja. Lo que sí es, por ahora, es lo que se *consulta* de 
 
 ## Cómo se agrega algo
 
-La regla: **una feature entra primero al modelo y después a la API.**
-
-1. En `src/model.js` (o un módulo de `src/`), con su prueba en `test/sdk.test.mjs`, en Node.
-2. Expuesta en `src/index.js` o `src/geometry.js`, con su línea en la tabla de `help()`.
-3. Si se dibuja distinto, en `adapters/three/viewer.js` — que no decide nada: espeja.
-4. A mano, desde la consola de `lab/index.html`.
-
-El tipado se verifica con `npm run typecheck`, en modo estricto.
-Los tipos van en JSDoc: los archivos siguen siendo `.js` y no hay paso de build.
-
-Nada de `src/` importa three, el DOM ni algo de afuera de `src/`, y hay una prueba que lo
-frena si eso cambia: el núcleo lo puede usar un servidor.
+La regla: **una feature entra primero al modelo y después a la API**, y antes de escribir
+nada, el criterio de qué es agnóstico (ver `CONTRIBUTING.md`). El flujo completo, la
+política de compatibilidad hacia atrás y el proceso de release están en
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Lo que todavía no está
 

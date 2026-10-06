@@ -265,7 +265,7 @@ export class Model {
    *   `at`: dónde queda su centro, en el espacio del padre (el mundo si no tiene).
    * @returns {string} el id
    */
-  addPiece({ name, size, material = 'pino', shape = null, at = [0, 0, 0], axes, parent = null }) {
+  addPiece({ name, size, material = 'default', shape = null, at = [0, 0, 0], axes, parent = null }) {
     if (!Array.isArray(size) || size.length !== 3 || size.some((s) => !(s > 0))) {
       throw new Error(`medidas inválidas: ${JSON.stringify(size)} (van tres números > 0, en cm)`);
     }
