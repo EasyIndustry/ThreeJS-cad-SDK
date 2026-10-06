@@ -5,7 +5,7 @@ según [SemVer](https://semver.org): mientras sea `0.x`, una versión menor pued
 y si rompe queda dicho arriba de todo en esa entrada. Los pre-releases (`-rc.N`) se prueban
 en una app antes del release (ver `CONTRIBUTING.md`).
 
-## [0.7.0] - sin publicar
+## [0.7.0] - sin publicar (pre-release `v0.7.0-rc.1`)
 
 Responde a [#6](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/6) (la pieza es su
 bruto más una lista de operaciones, y la forma que resulta es un cálculo) y
