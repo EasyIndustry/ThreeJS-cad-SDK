@@ -17,22 +17,26 @@
 //
 // Una parte es lo que se transforma, se duplica y se mete en un ensamble (Composite): la
 // pieza es una hoja, con todo lo fabricable; el ensamble es un conjunto de partes con una
-// transformación propia, y su geometría es la de sus partes.
+// transformación propia, y su geometría es la de sus partes. Una instancia es la misma pieza
+// o el mismo ensamble colocado otra vez: se ve y se consulta como lo que copia (`source` dice
+// de quién es copia), y editar la fuente la cambia a ella también.
 //
 // Una feature nueva entra primero al modelo (model.js), con su prueba en Node, y recién
 // después se expone acá — con su línea en la tabla de help(), que una prueba exige.
 import { Model } from './model.js';
 import { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, vec3 } from './geometry.js';
 import { obbOf, satDepth, intersectBoxes, contactsOf, candidatePairs, TOUCH, PEN } from './contact.js';
+import { arrayTransforms } from './array.js';
 import { help } from './help.js';
 
-export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, TOUCH, PEN };
+export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, TOUCH, PEN, arrayTransforms };
 
 /** @typedef {import('./model.js').Space} Space */
 /** @typedef {import('./geometry.js').PointLike} PointLike */
 /** @typedef {import('./geometry.js').VectorLike} VectorLike */
 /** @typedef {import('./geometry.js').AxisLike} AxisLike */
 /** @typedef {import('./help.js').Member} Member */
+/** @typedef {import('./array.js').ArraySpec} ArraySpec */
 
 /** @typedef {{ model: Model, part: (id: string) => Part, forget: (ids: string[]) => void }} Ctx */
 /** El documento al que pertenece cada parte, sin colgárselo a la parte a la vista. @type {WeakMap<Part, Ctx>} */
@@ -103,6 +107,14 @@ export class Part {
   get name() { return ctx(this).model.get(this.id).name; }
   /** El ensamble que la contiene, o null. @returns {Part | null} */
   get parent() { const p = ctx(this).model.get(this.id).parent; return p ? ctx(this).part(p) : null; }
+  /**
+   * De qué parte es copia: la fuente, si es una instancia, o la parte que copia, si es de
+   * adentro de una. Null si es una original.
+   * @returns {Part | null}
+   */
+  get source() { const s = ctx(this).model.get(this.id).source; return s ? ctx(this).part(s) : null; }
+  /** Las instancias que se colocaron de esta parte. @returns {readonly Part[]} */
+  get instances() { return Object.freeze(ctx(this).model.instancesOf(this.id).map((i) => ctx(this).part(i))); }
   /** Su colocación en el mundo: el Transform que lleva de su marco local al mundo. */
   get placement() { return new Transform(ctx(this).model.worldFrame(this.id)); }
   /** Sus ejes locales x, y, z, vistos desde el mundo. */
@@ -159,6 +171,17 @@ export class Part {
   }
   /** Copia exacta en el mismo lugar, con todo lo que tiene adentro. @returns {Part} */
   duplicate() { return ctx(this).part(ctx(this).model.duplicate(this.id)); }
+  /**
+   * Suelta una instancia: pasa a ser una parte de verdad, copia de lo que era su fuente, que
+   * ya no la sigue. Conserva su id y su lugar.
+   */
+  detach() {
+    const c = ctx(this);
+    const antes = c.model.subtree(this.id);
+    c.model.detach(this.id);
+    c.forget(antes.filter((id) => id !== this.id));
+    return this;
+  }
   /** @param {string} name */
   rename(name) { ctx(this).model.rename(this.id, name); return this; }
   /** La borra del documento, con todo lo que cuelga de ella. */
@@ -195,6 +218,8 @@ export class Part {
     ['kind', "'piece' o 'assembly'"],
     ['name', 'su nombre'],
     ['parent', 'el ensamble que la contiene, o null'],
+    ['source', 'de quién es copia, si es una instancia (o de adentro de una); si no, null'],
+    ['instances', 'las instancias que se colocaron de ella'],
     ['placement', 'su colocación en el mundo (Transform)'],
     ['axes', 'sus ejes locales x, y, z vistos desde el mundo (Vector3d)'],
     ['vertices', 'sus vértices en el mundo (Point3d). vertices[0].x se lee, no se escribe'],
@@ -205,7 +230,8 @@ export class Part {
     ['transform(t)', 'aplicarle un Transform: el verbo del que salen los demás'],
     ['move(v) / move(from, to)', 'trasladar por un vector, o de un punto a otro'],
     ["rotate(degrees, axis?, center?)", "girar en grados; eje 'x' | 'y' | 'z' o un vector; por el centro de su caja"],
-    ['duplicate()', 'copia exacta en el mismo lugar, con todo lo de adentro'],
+    ['duplicate()', 'copia exacta en el mismo lugar, con todo lo de adentro (independiente: no sigue a la original)'],
+    ['detach()', 'soltar una instancia: pasa a ser una parte de verdad, que ya no sigue a su fuente'],
     ['rename(name)', 'cambiarle el nombre'],
     ['remove()', 'borrarla, con todo lo que cuelga de ella'],
     ['touches(other, { tolerance? })', '¿se toca con la otra sin meterse? (a 0,2 cm o menos)'],
@@ -314,6 +340,24 @@ export function createWorkshop(model = new Model()) {
   /** @param {(Part | string)[]} list */
   const ids = (list) => list.map((x) => (typeof x === 'string' ? x : x.id));
 
+  /**
+   * Una instancia de una pieza o de un ensamble: la misma parte colocada otra vez. Editar la
+   * fuente (medidas, forma, material, lo de adentro) se ve en todas sus instancias. Nace
+   * encima de la fuente; `placement` la mueve y la gira, en el mundo.
+   * @param {Part | string} part
+   * @param {{ name?: string, parent?: Part | string | null, placement?: Transform }} [opts]
+   *   parent: el ensamble donde queda (el de la fuente si no se dice; null: suelta).
+   * @returns {Part}
+   */
+  function instantiate(part, { name, parent, placement } = {}) {
+    const id = model.instantiate(idDe(part), {
+      name,
+      parent: parent === undefined || parent === null ? parent : idDe(parent),
+      placement: placement ? Transform.check(placement).frame : undefined,
+    });
+    return c.part(id);
+  }
+
   const workshop = {
     model,
     Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection,
@@ -340,18 +384,30 @@ export function createWorkshop(model = new Model()) {
      * @param {(Part | string)[]} parts @param {{ name?: string }} [opts]
      */
     assemble(parts, opts) { return /** @type {Assembly} */ (c.part(model.assemble(ids(parts), opts))); },
+    instantiate,
+    /**
+     * Repite una parte en línea, en área o alrededor de un eje (ver `arrayTransforms`).
+     * `count` cuenta a la original: con 4 se crean 3 instancias, que siguen a la fuente.
+     * @param {Part | string} part @param {ArraySpec} spec
+     * @returns {readonly Part[]} las instancias nuevas
+     */
+    array(part, spec) {
+      const p = c.part(idDe(part));
+      const ts = arrayTransforms(spec, { origin: p.boundingBox.center });
+      return Object.freeze(ts.slice(1).map((t) => instantiate(p, { placement: t })));
+    },
     /** @param {string} id */
     part(id) { return c.part(id); },
     get parts() { return Object.freeze([...model.parts.keys()].map((id) => c.part(id))); },
     get roots() { return Object.freeze(model.roots().map((p) => c.part(p.id))); },
     /** Todos los contactos entre piezas del documento. @param {{ tolerance?: number }} [opts] */
     contacts({ tolerance = TOUCH } = {}) {
-      const ps = [...model.parts.values()].filter((p) => p.kind === 'piece').map((p) => p.id);
+      const ps = model.allPieces().map((p) => p.id);
       return contactos(model, ps, ps, tolerance);
     },
     /** Todas las piezas que se meten unas en otras. @param {{ tolerance?: number }} [opts] */
     collisions({ tolerance = PEN } = {}) {
-      const ps = [...model.parts.values()].filter((p) => p.kind === 'piece').map((p) => p.id);
+      const ps = model.allPieces().map((p) => p.id);
       return intersecciones(model, ps, ps, tolerance);
     },
     tree() { return model.tree(); },
@@ -360,7 +416,7 @@ export function createWorkshop(model = new Model()) {
     toJSON() { return model.toJSON(); },
     /** @param {any} data */
     load(data) { cache.clear(); model.load(data); },
-    clear() { cache.clear(); model.load({ counters: { piece: 0, assembly: 0 }, parts: [] }); },
+    clear() { cache.clear(); model.load({ counters: {}, parts: [] }); },
     /** @param {{ print?: boolean }} [opts] */
     help(opts) { return help('Workshop — el documento: crear, buscar y guardar partes', WORKSHOP_MEMBERS, opts); },
   };
@@ -371,6 +427,8 @@ export function createWorkshop(model = new Model()) {
 export const WORKSHOP_MEMBERS = [
   ['addPiece({ name?, size, material?, shape?, center?, placement?, axes? })', 'una pieza nueva: size en cm sobre sus ejes locales; placement (Transform) la orienta al crearla; axes fuerza cuál eje es el largo, el ancho y el espesor'],
   ['assemble(parts, { name? })', 'un ensamble con esas partes hermanas; se anida, no se aplasta'],
+  ['instantiate(part, { name?, parent?, placement? })', 'una instancia: la misma parte colocada otra vez; editar la fuente cambia todas'],
+  ['array(part, spec)', "repetir una parte en línea, en área o alrededor de un eje: crea instancias (ver arrayTransforms)"],
   ['part(id)', 'una parte por su id'],
   ['parts', 'todas las partes'],
   ['roots', 'las partes de primer nivel (las que no están en un ensamble)'],

@@ -1,11 +1,15 @@
 // El modelo: un árbol de partes.
 //
-// Una PARTE es lo que se puede mover, girar, duplicar y meter en un ensamble. Hay dos:
+// Una PARTE es lo que se puede mover, girar, duplicar y meter en un ensamble. Hay tres:
 //   - la PIEZA es una hoja: tiene lo fabricable (medidas, material, forma), definido en
 //     su marco local, que no cambia al moverla ni al girarla.
 //   - el ENSAMBLE es un nodo: no tiene nada fabricable propio, compone. Su caja sale de
 //     sus hijos. Y como es una parte más, se puede meter en otro ensamble — un mueble es
 //     un ensamble de cuerpo, puerta y cajón, que a su vez son ensambles.
+//   - la INSTANCIA es la misma pieza o el mismo ensamble colocado otra vez (lo que en Rhino
+//     es un Block, no una copia): guarda solo de quién es copia y su marco. Todo lo demás
+//     (medidas, forma, lo de adentro) se lee de la fuente cada vez, así que editar la
+//     fuente cambia todas sus instancias sin hacer nada más.
 //
 // Cada parte guarda su marco RESPECTO DE SU PADRE. El marco en el mundo se calcula
 // subiendo por el árbol. Girar un ensamble es tocar UN marco: los hijos no se enteran,
@@ -13,8 +17,13 @@
 //
 // Toda la geometría se puede pedir en 'local' (el marco de la parte) o en 'world'.
 //
+// Lo que está adentro de una instancia no se guarda: se resuelve al pedirlo, con un id de
+// camino (`I-1/P-2`: la pieza P-2 de la fuente, tal como queda dentro de la instancia I-1).
+// Esas piezas "virtuales" se leen como cualquier otra (vértices, contacto), pero no se
+// pueden cambiar por separado: se cambia la fuente, o se suelta la instancia (`detach`).
+//
 // Este módulo no importa nada de three ni del DOM: corre en Node y lo puede usar el
-// servidor. Lo prueba web/test/sdk.test.mjs.
+// servidor. Lo prueba test/sdk.test.mjs.
 import { frame, compose, invert, apply, rotate, turn, transpose3, isQuarterTurn, axisIndex } from './frame.js';
 
 /** @typedef {import('./frame.js').Vec3} Vec3 */
@@ -40,7 +49,8 @@ import { frame, compose, invert, apply, rotate, turn, transpose3, isQuarterTurn,
  * @property {Vec3} size         medidas en cm, sobre los ejes locales x, y, z
  * @property {Axes} axes
  * @property {string} material
- * @property {object | null} shape  forma (perfil, torneado, corte): ver core/shapes.js
+ * @property {object | null} shape  forma (perfil, torneado, corte)
+ * @property {string} [source]   solo en lo que sale de una instancia: la parte de la que es copia
  */
 /**
  * @typedef {Object} AssemblyDef
@@ -50,8 +60,21 @@ import { frame, compose, invert, apply, rotate, turn, transpose3, isQuarterTurn,
  * @property {string | null} parent
  * @property {Frame} frame
  * @property {string[]} children
+ * @property {string} [source]   solo en lo que sale de una instancia: la parte de la que es copia
  */
-/** @typedef {PieceDef | AssemblyDef} PartDef */
+/**
+ * Lo que se guarda de una instancia: de quién es copia (siempre una pieza o un ensamble
+ * de verdad, nunca otra instancia) y dónde está colocada.
+ * @typedef {Object} InstanceDef
+ * @property {'instance'} kind
+ * @property {string} id
+ * @property {string} name
+ * @property {string | null} parent
+ * @property {Frame} frame
+ * @property {string} source
+ */
+/** Lo que se ve de una parte: una pieza o un ensamble (una instancia se ve como lo que copia). @typedef {PieceDef | AssemblyDef} PartDef */
+/** Lo que se guarda. @typedef {PieceDef | AssemblyDef | InstanceDef} StoredPart */
 
 /** @typedef {{ min: Vec3, max: Vec3, size: Vec3, center: Vec3 }} Box */
 /** @typedef {{ axis: 0 | 1 | 2, side: 1 | -1, normal: Vec3, corners: Vec3[], center: Vec3 }} Face */
@@ -64,6 +87,8 @@ export function axesBySize(size) {
 
 const clone = (/** @type {any} */ v) => JSON.parse(JSON.stringify(v));
 
+const PREFIJO = /** @type {const} */ ({ piece: 'P', assembly: 'E', instance: 'I' });
+
 /** @param {Axes} axes @returns {Axes} */
 function checkAxes(axes) {
   const vals = [axes.length, axes.width, axes.thickness];
@@ -73,12 +98,38 @@ function checkAxes(axes) {
   return { length: axes.length, width: axes.width, thickness: axes.thickness };
 }
 
+/**
+ * Un documento que se carga no puede dejar una instancia sin fuente ni un conjunto que se
+ * contenga a sí mismo (recorrerlo no terminaría nunca).
+ * @param {Map<string, StoredPart>} parts
+ */
+function validate(parts) {
+  for (const p of parts.values()) {
+    if (p.kind !== 'instance') continue;
+    const s = parts.get(p.source);
+    if (!s || s.kind === 'instance') throw new Error(`documento inválido: ${p.id} es copia de ${p.source}, que no existe o es otra instancia`);
+  }
+  /** @type {Set<string>} */
+  const listo = new Set();
+  /** @param {string} id @param {string[]} camino */
+  const visitar = (id, camino) => {
+    if (camino.includes(id)) throw new Error(`documento inválido: ${[...camino, id].join(' → ')} queda adentro de sí mismo`);
+    if (listo.has(id)) return;
+    const p = parts.get(id);
+    if (!p) return;
+    const sig = p.kind === 'assembly' ? p.children : p.kind === 'instance' ? [p.source] : [];
+    for (const s of sig) visitar(s, [...camino, id]);
+    listo.add(id);
+  };
+  for (const id of parts.keys()) visitar(id, []);
+}
+
 export class Model {
   constructor() {
-    /** @type {Map<string, PartDef>} */
+    /** @type {Map<string, StoredPart>} */
     this.parts = new Map();
     /** @type {Record<string, number>} */
-    this.counters = { piece: 0, assembly: 0 };
+    this.counters = { piece: 0, assembly: 0, instance: 0 };
     /** @type {Set<(ev: { type: string, ids: string[] }) => void>} */
     this.listeners = new Set();
   }
@@ -91,17 +142,112 @@ export class Model {
     return () => this.listeners.delete(fn);
   }
 
-  /** @param {string} type @param {string[]} ids */
+  /**
+   * Avisa qué cambió. Si lo que cambió es (o está adentro de) la fuente de una instancia, la
+   * instancia cambió también: va en el aviso, con lo que tiene adentro.
+   * @param {string} type @param {string[]} ids
+   */
   emit(type, ids) {
-    for (const fn of this.listeners) fn({ type, ids });
+    const todos = this.#conInstancias(ids);
+    for (const fn of this.listeners) fn({ type, ids: todos });
+  }
+
+  /** @param {string[]} ids @returns {string[]} */
+  #conInstancias(ids) {
+    const insts = [...this.parts.values()].filter((p) => p.kind === 'instance');
+    if (!insts.length) return ids;
+    const out = new Set(ids);
+    const tocadas = new Set(ids.filter((id) => this.parts.has(id)));
+    /** @type {Set<string>} */
+    const alcanzadas = new Set();
+    for (let creció = true; creció;) {
+      creció = false;
+      // lo que, si es fuente de una instancia, la arrastra: lo tocado, lo que lo contiene,
+      // y las instancias ya alcanzadas con lo que las contiene
+      /** @type {Set<string>} */
+      const alcance = new Set();
+      for (const id of [...tocadas, ...alcanzadas]) {
+        for (let p = this.parts.get(id); p; p = p.parent ? this.parts.get(p.parent) : undefined) alcance.add(p.id);
+      }
+      for (const i of insts) {
+        if (i.kind === 'instance' && !alcanzadas.has(i.id) && alcance.has(i.source)) { alcanzadas.add(i.id); creció = true; }
+      }
+    }
+    for (const id of alcanzadas) for (const x of this.subtree(id)) out.add(x);
+    return [...out];
   }
 
   // ---------- leer ----------
 
-  /** @param {string} id @returns {PartDef} */
+  /**
+   * Lo que se ve de una parte. Una instancia se ve como lo que copia (una pieza o un
+   * ensamble) puesta en su lugar, y lo de adentro de una instancia se resuelve por su id de
+   * camino. Es para leer: lo guardado, que es lo que se cambia, está en `own`.
+   * @param {string} id @returns {PartDef}
+   */
   get(id) {
+    const rec = this.parts.get(id);
+    if (rec) return rec.kind === 'instance' ? this.#view(rec, id, rec.parent) : rec;
+    const i = id.lastIndexOf('/');
+    if (i < 0) throw new Error(`no existe la parte ${id}`);
+    const parentId = id.slice(0, i);
+    const parent = this.get(parentId);
+    const src = this.parts.get(id.slice(i + 1));
+    if (!src || parent.kind !== 'assembly' || !parent.children.includes(id)) throw new Error(`no existe la parte ${id}`);
+    return this.#view(src, id, parentId);
+  }
+
+  /**
+   * @param {StoredPart} rec lo guardado de lo que se copia
+   * @param {string} id el id con que se ve (el de `rec`, o el de camino si es de adentro de una instancia)
+   * @param {string | null} parent
+   * @returns {PartDef}
+   */
+  #view(rec, id, parent) {
+    const base = rec.kind === 'instance' ? this.#sourceOf(rec) : rec;
+    const source = id !== rec.id ? rec.id : rec.kind === 'instance' ? rec.source : undefined;
+    if (base.kind === 'piece') {
+      return { kind: 'piece', id, name: rec.name, parent, frame: rec.frame, size: base.size, axes: base.axes, material: base.material, shape: base.shape, source };
+    }
+    const children = rec.kind === 'assembly' && id === rec.id ? rec.children : base.children.map((c) => `${id}/${c}`);
+    return { kind: 'assembly', id, name: rec.name, parent, frame: rec.frame, children, source };
+  }
+
+  /** @param {InstanceDef} inst @returns {PieceDef | AssemblyDef} */
+  #sourceOf(inst) {
+    const s = this.parts.get(inst.source);
+    if (!s || s.kind === 'instance') throw new Error(`${inst.id} es copia de ${inst.source}, que ya no existe`);
+    return s;
+  }
+
+  /**
+   * La parte tal como está guardada, que es lo que se cambia. Lo de adentro de una
+   * instancia no se guarda, así que no hay nada que cambiar ahí.
+   * @param {string} id @returns {StoredPart}
+   */
+  own(id) {
     const p = this.parts.get(id);
-    if (!p) throw new Error(`no existe la parte ${id}`);
+    if (p) return p;
+    const raiz = id.split('/')[0];
+    if (id.includes('/') && this.parts.has(raiz)) {
+      throw new Error(`${id} es parte de la instancia ${raiz}: se cambia en su fuente, o se suelta la instancia con detach()`);
+    }
+    throw new Error(`no existe la parte ${id}`);
+  }
+
+  /** Una pieza guardada, para cambiarla. @param {string} id @returns {PieceDef} */
+  ownPiece(id) {
+    const p = this.own(id);
+    if (p.kind === 'instance') throw new Error(`${id} es una instancia de ${p.source}: se cambia en su fuente, o se suelta con detach()`);
+    if (p.kind !== 'piece') throw new Error(`${id} es un ensamble, no una pieza`);
+    return p;
+  }
+
+  /** Un ensamble guardado, para cambiarlo. @param {string} id @returns {AssemblyDef} */
+  ownAssembly(id) {
+    const p = this.own(id);
+    if (p.kind === 'instance') throw new Error(`${id} es una instancia: no puede contener partes (sueltala con detach())`);
+    if (p.kind !== 'assembly') throw new Error(`${id} no es un ensamble`);
     return p;
   }
 
@@ -123,10 +269,36 @@ export class Model {
     return p.kind === 'piece' ? [p] : p.children.flatMap((c) => this.piecesOf(c));
   }
 
-  /** @param {string} id @returns {string[]} los ids del subárbol, la parte primero */
+  /**
+   * Todas las piezas del documento, con las de adentro de cada instancia (en el mundo, son
+   * piezas como cualquier otra). En el orden en que se crearon.
+   * @returns {PieceDef[]}
+   */
+  allPieces() {
+    /** @type {PieceDef[]} */
+    const out = [];
+    for (const p of this.parts.values()) {
+      if (p.kind === 'piece') out.push(p);
+      else if (p.kind === 'instance') out.push(...this.piecesOf(p.id));
+    }
+    return out;
+  }
+
+  /** @param {string} id @returns {string[]} los ids del subárbol, la parte primero (con lo de adentro de las instancias) */
   subtree(id) {
     const p = this.get(id);
     return p.kind === 'piece' ? [id] : [id, ...p.children.flatMap((c) => this.subtree(c))];
+  }
+
+  /** @param {string} id @returns {string[]} los ids guardados del subárbol: sin lo que sale de resolver instancias */
+  realSubtree(id) {
+    const p = this.own(id);
+    return p.kind === 'assembly' ? [id, ...p.children.flatMap((c) => this.realSubtree(c))] : [id];
+  }
+
+  /** Los ids de las instancias de una parte (las guardadas, no las de adentro de otra instancia). @param {string} id @returns {string[]} */
+  instancesOf(id) {
+    return [...this.parts.values()].filter((p) => p.kind === 'instance' && p.source === id).map((p) => p.id);
   }
 
   /** @param {string} id @returns {Frame} el marco de la parte en el mundo */
@@ -263,10 +435,10 @@ export class Model {
 
   // ---------- crear ----------
 
-  /** @param {'piece' | 'assembly'} kind */
+  /** @param {'piece' | 'assembly' | 'instance'} kind */
   nextId(kind) {
-    this.counters[kind]++;
-    return `${kind === 'piece' ? 'P' : 'E'}-${this.counters[kind]}`;
+    this.counters[kind] = (this.counters[kind] ?? 0) + 1;
+    return `${PREFIJO[kind]}-${this.counters[kind]}`;
   }
 
   /**
@@ -302,7 +474,7 @@ export class Model {
    */
   assemble(ids, { name } = {}) {
     if (!ids.length) throw new Error('no hay nada para ensamblar');
-    const parts = ids.map((id) => this.get(id));
+    const parts = ids.map((id) => this.own(id));
     const parent = parts[0].parent;
     if (parts.some((p) => p.parent !== parent)) {
       throw new Error('solo se ensamblan partes hermanas (que estén en el mismo ensamble, o sueltas)');
@@ -316,7 +488,7 @@ export class Model {
     const a = { kind: 'assembly', id, name: name || `Ensamble ${this.counters.assembly}`, parent, frame: frame(center), children: [] };
     this.parts.set(id, a);
     if (parent) {
-      const pa = /** @type {AssemblyDef} */ (this.get(parent));
+      const pa = this.ownAssembly(parent);
       pa.children = pa.children.filter((c) => !ids.includes(c));
       pa.children.push(id);
     }
@@ -331,12 +503,11 @@ export class Model {
    * @param {string} parentId @param {string[]} ids @param {{ keepWorld: boolean }} opts
    */
   adopt(parentId, ids, { keepWorld }) {
-    const pa = this.get(parentId);
-    if (pa.kind !== 'assembly') throw new Error(`${parentId} no es un ensamble`);
+    const pa = this.ownAssembly(parentId);
     const inv = invert(this.worldFrame(parentId));
     for (const id of ids) {
-      if (this.subtree(id).includes(parentId)) throw new Error(`${id} no puede quedar adentro de sí mismo`);
-      const p = this.get(id);
+      const p = this.own(id);
+      if (this.#alcance(id).has(parentId)) throw new Error(`${id} no puede quedar adentro de sí mismo`);
       const w = this.worldFrame(id);
       p.frame = keepWorld ? compose(inv, w) : p.frame;
       p.parent = parentId;
@@ -344,18 +515,49 @@ export class Model {
     }
   }
 
+  /**
+   * Todo lo guardado que forma parte de `id`: ella, lo que tiene adentro y, por cada
+   * instancia, su fuente (con todo lo de la fuente). Si un contenedor está en el alcance de
+   * una parte, ponerla ahí adentro la haría contenerse a sí misma.
+   * @param {string} id @param {Set<string>} [visto] @returns {Set<string>}
+   */
+  #alcance(id, visto = new Set()) {
+    if (visto.has(id)) return visto;
+    visto.add(id);
+    const p = this.parts.get(id);
+    if (p?.kind === 'assembly') for (const c of p.children) this.#alcance(c, visto);
+    else if (p?.kind === 'instance') this.#alcance(p.source, visto);
+    return visto;
+  }
+
+  /**
+   * No se puede dejar sin fuente a una instancia: quitar partes que son la fuente de
+   * instancias que quedan afuera es un error, con el nombre de quién las usa.
+   * @param {string[]} quitadas
+   */
+  #sinDependientes(quitadas) {
+    const q = new Set(quitadas);
+    const deps = [...this.parts.values()].filter((p) => p.kind === 'instance' && !q.has(p.id) && q.has(p.source));
+    if (deps.length) {
+      const fuentes = [...new Set(deps.map((d) => /** @type {InstanceDef} */ (d).source))];
+      throw new Error(`${fuentes.join(', ')} es la fuente de ${deps.map((d) => d.id).join(', ')}: se sueltan (detach) o se borran las instancias antes`);
+    }
+  }
+
   /** Deshace un ensamble: sus hijos pasan al padre, en el mismo lugar. @param {string} id */
   disassemble(id) {
-    const a = this.get(id);
+    const a = this.own(id);
+    if (a.kind === 'instance') throw new Error(`${id} es una instancia: se suelta con detach() y después se deshace`);
     if (a.kind !== 'assembly') throw new Error(`${id} no es un ensamble`);
+    this.#sinDependientes([id]);
     const kids = [...a.children];
     for (const k of kids) {
-      const p = this.get(k);
+      const p = this.own(k);
       p.frame = compose(a.frame, p.frame);
       p.parent = a.parent;
     }
     if (a.parent) {
-      const pa = /** @type {AssemblyDef} */ (this.get(a.parent));
+      const pa = this.ownAssembly(a.parent);
       pa.children = pa.children.flatMap((c) => (c === id ? kids : [c]));
     }
     this.parts.delete(id);
@@ -365,21 +567,89 @@ export class Model {
 
   /** Borra una parte y todo lo que cuelga de ella. @param {string} id */
   remove(id) {
-    const p = this.get(id);
+    const p = this.own(id);
+    const guardadas = this.realSubtree(id);
+    this.#sinDependientes(guardadas);
     const ids = this.subtree(id);
     if (p.parent) {
-      const pa = /** @type {AssemblyDef} */ (this.get(p.parent));
+      const pa = this.ownAssembly(p.parent);
       pa.children = pa.children.filter((c) => c !== id);
     }
-    for (const k of ids) this.parts.delete(k);
+    for (const k of guardadas) this.parts.delete(k);
     this.emit('remove', ids);
+  }
+
+  // ---------- instancias ----------
+
+  /**
+   * Una instancia de una pieza o de un ensamble: la misma parte colocada otra vez. Editar la
+   * fuente se ve en todas sus instancias; la instancia solo tiene su lugar. Nace encima de
+   * la fuente (en su mismo ensamble, si lo tiene), salvo que se diga otra cosa.
+   * Instanciar una instancia da otra instancia de la misma fuente.
+   * @param {string} srcId
+   * @param {{ name?: string, parent?: string | null, placement?: Frame }} [opts]
+   *   `parent`: el ensamble donde queda (el de la fuente si no se dice; null: suelta).
+   *   `placement`: una transformación rígida, en el mundo, que se le aplica a la colocación
+   *   de la fuente (la instancia queda movida y girada por ella).
+   * @returns {string} el id de la instancia
+   */
+  instantiate(srcId, { name, parent, placement } = {}) {
+    const src = this.own(srcId);
+    const base = src.kind === 'instance' ? this.#sourceOf(src) : src;
+    const dest = parent === undefined ? src.parent : parent;
+    if (dest !== null) {
+      this.ownAssembly(dest);
+      if (this.#alcance(base.id).has(dest)) throw new Error(`no se puede instanciar ${base.id} adentro de ${dest}: quedaría adentro de sí misma`);
+    }
+    const mundo = this.worldFrame(srcId);
+    const id = this.nextId('instance');
+    /** @type {InstanceDef} */
+    const inst = {
+      kind: 'instance', id, name: name || src.name, parent: dest,
+      frame: compose(invert(this.parentWorld(dest)), placement ? compose(placement, mundo) : mundo),
+      source: base.id,
+    };
+    this.parts.set(id, inst);
+    if (dest) this.ownAssembly(dest).children.push(id);
+    this.emit('add', [id]);
+    return id;
+  }
+
+  /**
+   * Suelta una instancia: pasa a ser una pieza o un ensamble de verdad, copia de lo que era
+   * su fuente, que ya no la sigue. Conserva su id (la app guarda ids) y su lugar. Lo de
+   * adentro, si es un ensamble, son partes nuevas.
+   * @param {string} id
+   */
+  detach(id) {
+    const inst = this.own(id);
+    if (inst.kind !== 'instance') throw new Error(`${id} no es una instancia`);
+    const src = this.#sourceOf(inst);
+    const antes = this.subtree(id);
+    if (src.kind === 'piece') {
+      /** @type {PieceDef} */
+      const real = {
+        kind: 'piece', id, name: inst.name, parent: inst.parent, frame: clone(inst.frame),
+        size: [...src.size], axes: { ...src.axes }, material: src.material, shape: src.shape ? clone(src.shape) : null,
+      };
+      this.parts.set(id, real);
+    } else {
+      /** @type {AssemblyDef} */
+      const real = { kind: 'assembly', id, name: inst.name, parent: inst.parent, frame: clone(inst.frame), children: [] };
+      this.parts.set(id, real);
+      /** @type {Map<string, string>} */
+      const copias = new Map();
+      real.children = src.children.map((c) => this.#copiar(c, id, copias));
+      this.#remapear(copias);
+    }
+    this.emit('detach', [...new Set([...antes, ...this.subtree(id)])]);
   }
 
   // ---------- colocar: solo tocan marcos, nunca una definición ----------
 
   /** Corre la parte `delta` cm, medido en el mundo. @param {string} id @param {Vec3} delta */
   move(id, delta) {
-    const p = this.get(id);
+    const p = this.own(id);
     const d = rotate(transpose3(this.parentWorld(p.parent).r), delta); // al espacio del padre
     p.frame = { r: p.frame.r, t: [p.frame.t[0] + d[0], p.frame.t[1] + d[1], p.frame.t[2] + d[2]] };
     this.emit('move', this.subtree(id));
@@ -401,7 +671,7 @@ export class Model {
    * @param {{ pivot?: 'center' | 'origin' | Vec3, local?: boolean }} [opts]
    */
   rotate(id, axis, deg, { pivot = 'center', local = false } = {}) {
-    const p = this.get(id);
+    const p = this.own(id);
     const w = this.worldFrame(id);
     /** @type {Axis | Vec3} */
     let ax = axis;
@@ -422,7 +692,7 @@ export class Model {
    * @param {string} id @param {Frame} T
    */
   transform(id, T) {
-    const p = this.get(id);
+    const p = this.own(id);
     p.frame = compose(invert(this.parentWorld(p.parent)), compose(T, this.worldFrame(id)));
     this.emit('transform', this.subtree(id));
   }
@@ -430,13 +700,13 @@ export class Model {
   /** @param {string} id @param {string} name */
   rename(id, name) {
     if (typeof name !== 'string' || !name.trim()) throw new Error('el nombre no puede estar vacío');
-    this.get(id).name = name.trim();
+    this.own(id).name = name.trim();
     this.emit('rename', [id]);
   }
 
   /** @param {string} id @param {string} material */
   setMaterial(id, material) {
-    this.piece(id).material = material;
+    this.ownPiece(id).material = material;
     this.emit('material', [id]);
   }
 
@@ -446,34 +716,54 @@ export class Model {
    * @param {string} id @param {Vec3} size
    */
   resize(id, size) {
-    const p = this.piece(id);
+    const p = this.ownPiece(id);
     if (size.length !== 3 || size.some((s) => !(s > 0))) throw new Error(`medidas inválidas: ${JSON.stringify(size)}`);
     p.size = [...size];
     this.emit('resize', [id]);
   }
 
   /**
+   * Copia real de lo guardado en `srcId` y de todo lo que cuelga de ello, bajo `parent`.
+   * @param {string} srcId @param {string | null} parent @param {Map<string, string>} copias viejo → nuevo
+   * @returns {string}
+   */
+  #copiar(srcId, parent, copias) {
+    const src = this.own(srcId);
+    const nid = this.nextId(src.kind);
+    /** @type {any} */
+    const n = clone(src);
+    n.id = nid;
+    n.parent = parent;
+    if (n.kind === 'assembly') n.children = [];
+    this.parts.set(nid, n);
+    copias.set(srcId, nid);
+    if (src.kind === 'assembly') n.children = src.children.map((c) => this.#copiar(c, nid, copias));
+    return nid;
+  }
+
+  /** Una instancia copiada cuya fuente también se copió mira a la copia: lo copiado se basta a sí mismo. @param {Map<string, string>} copias */
+  #remapear(copias) {
+    for (const nid of copias.values()) {
+      const n = this.parts.get(nid);
+      if (n?.kind === 'instance' && copias.has(n.source)) n.source = /** @type {string} */ (copias.get(n.source));
+    }
+  }
+
+  /**
    * Copia la parte con todo lo que cuelga de ella —marcos, giros, ensambles adentro— en
    * el mismo lugar y bajo el mismo padre. Como el giro vive en el marco y no en las
-   * medidas, la copia sale exactamente igual: no hay nada que reconstruir.
+   * medidas, la copia sale exactamente igual: no hay nada que reconstruir. La copia es
+   * independiente de la original (para que sigan a la original, se instancia). Copiar una
+   * instancia da otra instancia de la misma fuente.
    * @param {string} id @returns {string} el id de la copia
    */
   duplicate(id) {
-    /** @type {(srcId: string, parent: string | null) => string} */
-    const copy = (srcId, parent) => {
-      const src = this.get(srcId);
-      const nid = this.nextId(src.kind);
-      const n = clone(src);
-      n.id = nid;
-      n.parent = parent;
-      if (n.kind === 'assembly') n.children = [];
-      this.parts.set(nid, n);
-      if (src.kind === 'assembly') n.children = src.children.map((c) => copy(c, nid));
-      return nid;
-    };
-    const src = this.get(id);
-    const nid = copy(id, src.parent);
-    if (src.parent) /** @type {AssemblyDef} */ (this.get(src.parent)).children.push(nid);
+    const src = this.own(id);
+    /** @type {Map<string, string>} */
+    const copias = new Map();
+    const nid = this.#copiar(id, src.parent, copias);
+    this.#remapear(copias);
+    if (src.parent) this.ownAssembly(src.parent).children.push(nid);
     this.emit('add', this.subtree(nid));
     return nid;
   }
@@ -481,14 +771,16 @@ export class Model {
   // ---------- guardar ----------
 
   toJSON() {
-    return { version: 1, counters: { ...this.counters }, parts: [...this.parts.values()].map(clone) };
+    return { version: 2, counters: { ...this.counters }, parts: [...this.parts.values()].map(clone) };
   }
 
-  /** @param {{ counters: Record<string, number>, parts: PartDef[] }} data */
+  /** @param {{ counters: Record<string, number>, parts: StoredPart[] }} data */
   load(data) {
+    const parts = new Map(data.parts.map((p) => [p.id, /** @type {StoredPart} */ (clone(p))]));
+    validate(parts);
     const ids = [...this.parts.keys()];
-    this.parts = new Map(data.parts.map((p) => [p.id, clone(p)]));
-    this.counters = { ...data.counters };
+    this.parts = parts;
+    this.counters = { piece: 0, assembly: 0, instance: 0, ...data.counters };
     this.emit('load', [...ids, ...this.parts.keys()]);
   }
 
@@ -499,10 +791,13 @@ export class Model {
     const p = this.get(id);
     const f = this.worldFrame(id);
     const giro = isQuarterTurn(f.r) ? (f.r.join() === '1,0,0,0,1,0,0,0,1' ? '' : ' ⟳90°') : ' ⟳';
+    const copia = this.parts.get(id)?.kind === 'instance' ? ` ⧉ ${p.source}` : '';
     if (p.kind === 'piece') {
       const d = this.dims(id);
-      return `${pad}▭ ${p.id} ${p.name}  ${d.length} × ${d.width} × ${d.thickness} ${p.material}${giro}`;
+      return `${pad}▭ ${p.id} ${p.name}  ${d.length} × ${d.width} × ${d.thickness} ${p.material}${giro}${copia}`;
     }
-    return [`${pad}▣ ${p.id} ${p.name}${giro}`, ...p.children.map((c) => this.tree(c, depth + 1))].join('\n');
+    // lo de adentro de una instancia es el de su fuente: no se repite
+    const hijos = copia ? [] : p.children.map((c) => this.tree(c, depth + 1));
+    return [`${pad}▣ ${p.id} ${p.name}${giro}${copia}`, ...hijos].join('\n');
   }
 }

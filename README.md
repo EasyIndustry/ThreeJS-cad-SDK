@@ -196,6 +196,61 @@ de adentro sigue valiendo cuando el conjunto se mueve.
 Y para una selección suelta que no tiene que persistir, alcanza con un array:
 `Transform.apply(t, [a, b, c])`.
 
+## Instancias y matrices
+
+Una **instancia** es la misma pieza o el mismo ensamble colocado otra vez. Es lo que en Rhino
+es un *Block* (y no una copia): guarda solo de quién es copia y su marco, y todo lo demás —
+medidas, forma, material, lo de adentro de un ensamble — se lee de la fuente cada vez. Editar
+la fuente cambia todas sus instancias, sin hacer nada más.
+
+```js
+const modulo = taller.assemble([base, tapa, lateral1, lateral2], { name: 'Módulo' });
+const copias = taller.array(modulo, { type: 'linear', count: 4, direction: [0, 1, 0], distance: 120 });
+tapa.resize([60, 2, 18]);       // cambian los cuatro
+copias[0].source;               // el módulo
+modulo.instances;               // las tres copias
+copias[0].detach();             // ya no sigue a la fuente: pasa a ser un ensamble de verdad
+```
+
+- **`duplicate()`** da una copia independiente; **`taller.instantiate(parte)`** da una que sigue
+  a la original. Las dos tienen sentido: una es "hacé otro igual", la otra "es el mismo".
+- **Lo de adentro de una instancia se lee, no se cambia por separado.** Sus piezas aparecen en
+  `vertices`, `pieces` y `taller.contacts()` como piezas de verdad, con un id de camino
+  (`I-1/P-2`: la pieza `P-2` de la fuente, tal como queda dentro de `I-1`). Moverlas o
+  cambiarlas por separado falla con un mensaje que dice a qué instancia pertenecen: se cambia
+  la fuente, o se suelta la instancia.
+- **`detach()` conserva el id** (la app guarda ids) y el lugar. Lo de adentro pasa a ser partes
+  nuevas, con su propio id.
+- **No se borra ni se deshace la fuente de una instancia**: antes se suelta o se borra la
+  instancia, y el error dice cuáles son.
+- **Duplicar un conjunto que tiene una fuente y sus instancias** (un ensamble con un módulo y tres
+  copias) da un conjunto que se basta a sí mismo: las copias siguen al módulo copiado, no al de
+  afuera.
+- Un documento guardado con instancias lo lee esta versión y las siguientes (`version: 2`); uno
+  guardado antes se carga igual.
+
+### Matrices
+
+`taller.array(parte, spec)` repite una parte creando instancias, y `arrayTransforms(spec)` es
+la misma cuenta sin tocar el documento (devuelve las transformaciones, en el mundo). `count`
+cuenta a la original: con `count: 4` se crean tres instancias.
+
+| `type` | qué hace |
+|---|---|
+| `'linear'` | en una dirección: `{ count, direction, distance, fit? }` |
+| `'area'` | en dos: `{ count, count2, direction, direction2, distance, distance2, fit? }` |
+| `'polar'` | alrededor de un eje: `{ count, axis?, center?, angle?, fit?, orient? }` |
+
+- **`fit: 'span'`** (por defecto): `distance` es el largo total, de la primera a la última, y
+  el paso se reparte. **`fit: 'step'`**: `distance` es la separación entre dos consecutivas, y
+  sumar copias alarga la fila. Qué manda, la medida total o el paso, lo decide quien llama.
+- **Polar:** un barrido de 360° no repite la primera copia (4 copias = cada 90°, no cada 120°);
+  uno menor incluye las dos puntas. Con `fit: 'step'`, `angle` es lo que gira cada paso.
+  `orient: true` (por defecto) gira cada copia con el barrido; `orient: false` la deja paralela
+  a la original y solo cambia de lugar.
+- Las matrices **crean** instancias y listo: no queda un objeto "matriz" que se re-evalúe. Si la
+  cantidad depende de otra cosa (un volumen que se estira), quien llama vuelve a calcularla.
+
 ## La API
 
 ```js
@@ -267,7 +322,7 @@ Dicho para que nadie lo dé por hecho:
 - **El contacto se calcula con la caja de la pieza.** Para una tabla es exacto; para una pata
   torneada o un caño, es el contacto de su caja. Cuando las piezas tengan su geometría real,
   el contacto la va a usar.
-- **No hay fijaciones, juntas de movimiento, matrices, vínculos ni recortes.** Son relaciones
+- **No hay fijaciones, juntas de movimiento, vínculos ni recortes.** Son relaciones
   entre partes, y cada una va a entrar siguiendo la regla de arriba.
 - **No hay deshacer.**
 

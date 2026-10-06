@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createWorkshop, Part, Piece, Assembly, Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, WORKSHOP_MEMBERS,
+  arrayTransforms,
 } from '../src/index.js';
 import { Model } from '../src/model.js';
 import { memberNames } from '../src/help.js';
@@ -563,11 +564,336 @@ test('contactos: errores claros', () => {
   assert.ok(!a.touches(a), 'una pieza consigo misma no es un contacto');
 });
 
+// ---------- instancias y matrices ----------
+// Una instancia es la misma parte colocada otra vez (un Block de Rhino, no un Group): editar
+// la fuente la cambia a ella también. `count` de una matriz cuenta a la original.
+
+test('una instancia nace sobre su fuente y la sigue: editar la fuente cambia las dos', () => {
+  const t = createWorkshop();
+  const a = t.addPiece({ name: 'Tabla', size: [40, 2, 20], material: 'roble', center: [0, 1, 0] });
+  const i = t.instantiate(a, { placement: Transform.translation([100, 0, 0]) });
+  assert.equal(i.source.id, a.id);
+  assert.equal(a.source, null);
+  assert.deepEqual(a.instances.map((x) => x.id), [i.id]);
+  assert.equal(i.kind, 'piece');
+  assert.equal(i.name, 'Tabla');
+  assert.deepEqual(pts(i.vertices), pts(a.vertices.map((v) => v.add([100, 0, 0]))));
+  a.resize([60, 2, 20]);
+  a.setMaterial('nogal');
+  assert.deepEqual(i.size, { x: 60, y: 2, z: 20 });
+  assert.equal(i.material, 'nogal');
+  assert.deepEqual(i.dims, a.dims);
+  assert.deepEqual(pts(i.vertices), pts(a.vertices.map((v) => v.add([100, 0, 0]))), 'sigue en su lugar, con las medidas nuevas');
+  assert.match(t.tree(), /⧉ P-1/);
+});
+
+test('una instancia solo tiene su lugar: no se le cambian medidas ni material, sí se la mueve y se la gira', () => {
+  const t = createWorkshop();
+  const a = larguero(t);
+  const i = t.instantiate(a);
+  assert.throws(() => i.resize([1, 1, 1]), /instancia de P-1/);
+  assert.throws(() => i.setMaterial('x'), /instancia de P-1/);
+  i.rotate(90, 'y').move([0, 0, 300]);
+  assert.deepEqual(i.dims, a.dims, 'girarla no cambia su largo');
+  assert.deepEqual(pts(a.vertices), pts(larguero(createWorkshop()).vertices), 'la fuente no se movió');
+  assert.equal(i.rename('Otra').name, 'Otra');
+  assert.equal(a.name, 'Larguero');
+});
+
+test('instanciar una instancia es instanciar su fuente, y se puede elegir el ensamble donde queda', () => {
+  const t = createWorkshop();
+  const a = larguero(t, [0, 5, 0]);
+  const b = larguero(t, [0, 5, 50]);
+  const e = t.assemble([b], { name: 'Marco' });
+  e.rotate(30, 'y');
+  const i = t.instantiate(a, { placement: Transform.translation([0, 0, 200]) });
+  const j = t.instantiate(i, { parent: e });
+  assert.equal(j.source.id, a.id);
+  assert.equal(j.parent.id, e.id);
+  assert.deepEqual(pts(j.vertices), pts(i.vertices), 'queda donde estaba en el mundo, aunque cambie de ensamble');
+  assert.equal(t.instantiate(j, { parent: null }).parent, null);
+});
+
+test('una matriz de un ensamble armado y girado: cada copia conserva el giro de adentro (el bug 2, con N copias)', () => {
+  const t = createWorkshop();
+  const a = larguero(t, [0, 5, 0]).rotate(45, 'z');
+  const b = larguero(t, [0, 5, 50]);
+  const e = t.assemble([a, b], { name: 'Marco' });
+  e.rotate(30, 'y');
+  const copias = t.array(e, { type: 'linear', count: 4, direction: [1, 0, 0], distance: 900 });
+  assert.equal(copias.length, 3, 'count cuenta a la original');
+  copias.forEach((c, k) => {
+    assert.ok(c instanceof Assembly);
+    assert.equal(c.source.id, e.id);
+    assert.equal(c.children.length, 2);
+    assert.deepEqual(pts(c.vertices), pts(e.vertices.map((v) => v.add([300 * (k + 1), 0, 0]))));
+    assert.deepEqual(pts(c.children[0].vertices), pts(a.vertices.map((v) => v.add([300 * (k + 1), 0, 0]))), 'el larguero a 45° sigue a 45°');
+    assert.deepEqual(c.children[0].dims, a.dims);
+  });
+  a.resize([220, 4, 10]);
+  for (const c of copias) assert.equal(c.pieces[0].dims.length, 220, 'cambiar la fuente cambia las N copias');
+});
+
+test('las piezas de adentro de una instancia se leen, pero no se cambian por separado', () => {
+  const t = createWorkshop();
+  const e = t.assemble([larguero(t, [0, 5, 0]), larguero(t, [0, 5, 50])]);
+  const [i] = t.array(e, { type: 'linear', count: 2, direction: [0, 0, 1], distance: 200 });
+  const interna = i.children[0];
+  assert.match(interna.id, new RegExp(`^${i.id}/P-1$`));
+  assert.equal(t.part(interna.id).id, interna.id, 'se encuentra por su id (p. ej. el de una cara o un contacto)');
+  assert.equal(interna.source.id, 'P-1');
+  assert.equal(interna.parent.id, i.id);
+  for (const op of [() => interna.move([1, 0, 0]), () => interna.rename('x'), () => interna.remove(), () => interna.duplicate(), () => interna.resize([1, 1, 1])]) {
+    assert.throws(op, /es parte de la instancia/);
+  }
+  assert.throws(() => i.explode(), /es una instancia/);
+});
+
+test('las instancias son piezas de verdad para el contacto: tocan, y taller.contacts() las ve', () => {
+  const t = createWorkshop();
+  const b = t.addPiece({ size: [10, 2, 30], center: [5, 1, 0] });                       // x de 0 a 10
+  t.array(b, { type: 'linear', count: 4, direction: [1, 0, 0], distance: 10, fit: 'step' });
+  assert.equal(t.parts.length, 4);
+  const cs = t.contacts();
+  assert.equal(cs.length, 3, 'cada tabla toca a la que sigue');
+  for (const c of cs) assert.equal(Math.round(c.area), 60);
+  const [p, i1, , i3] = t.parts;
+  assert.ok(p.touches(i1));
+  assert.ok(!p.touches(i3));
+  assert.equal(t.collisions().length, 0);
+});
+
+test('un ensamble repetido tiene las mismas uniones adentro que el original', () => {
+  const t = createWorkshop();
+  const e = t.assemble([t.addPiece({ size: [10, 2, 30], center: [5, 1, 0] }), t.addPiece({ size: [10, 2, 30], center: [15, 1, 0] })]);
+  const [c] = t.array(e, { type: 'linear', count: 2, direction: [0, 0, 1], distance: 100 });
+  assert.equal(e.contactsWith(e).length, 1);
+  assert.equal(c.contactsWith(c).length, 1);
+  assert.equal(c.touches(e), false);
+  const ids = t.contacts().flatMap((x) => [x.a, x.b]);
+  assert.ok(ids.every((id) => !id.includes('/') || id.startsWith(`${c.id}/`)), 'los contactos de adentro de la copia dicen sus ids de camino');
+  assert.ok(ids.some((id) => id.startsWith(`${c.id}/`)));
+});
+
+test('soltar una instancia: conserva el id y el lugar, y ya no sigue a la fuente', () => {
+  const t = createWorkshop();
+  const a = larguero(t, [0, 5, 0]).rotate(45, 'z');
+  const e = t.assemble([a, larguero(t, [0, 5, 50])]);
+  e.rotate(30, 'y');
+  const [i] = t.array(e, { type: 'linear', count: 2, direction: [0, 0, 1], distance: 200 });
+  const id = i.id, antes = pts(i.vertices);
+  assert.equal(i.detach(), i);
+  assert.equal(i.id, id);
+  assert.equal(i.source, null);
+  assert.deepEqual(pts(i.vertices), antes, 'no se movió');
+  assert.equal(i.children.length, 2);
+  assert.ok(i.children.every((c) => !c.id.includes('/')), 'lo de adentro son partes de verdad, con id propio');
+  assert.deepEqual(e.instances, []);
+  assert.throws(() => i.detach(), /no es una instancia/);
+  a.resize([100, 4, 10]);
+  assert.equal(i.pieces[0].dims.length, 200, 'la suelta ya no sigue a la fuente');
+  i.pieces[0].resize([150, 4, 10]);
+  assert.equal(a.dims.length, 100, 'y la fuente no la sigue a ella');
+  assert.ok(!t.toJSON().parts.some((p) => p.kind === 'instance'));
+});
+
+test('soltar la instancia de una pieza: pasa a ser una pieza con su id y sus medidas', () => {
+  const t = createWorkshop();
+  const a = t.addPiece({ size: [40, 2, 20], material: 'roble' });
+  const i = t.instantiate(a, { placement: Transform.translation([0, 0, 50]) });
+  i.detach();
+  i.resize([10, 2, 20]).setMaterial('pino');
+  assert.deepEqual(a.size, { x: 40, y: 2, z: 20 });
+  assert.equal(a.material, 'roble');
+  assert.equal(i.kind, 'piece');
+});
+
+test('no se borra la fuente de una instancia ni se la deshace: primero se suelta o se borra la instancia', () => {
+  const t = createWorkshop();
+  const a = larguero(t);
+  const e = t.assemble([larguero(t, [0, 0, 50]), larguero(t, [0, 0, 100])]);
+  const [ia] = t.array(a, { type: 'linear', count: 2, direction: [0, 0, 1], distance: 10 });
+  const [ie] = t.array(e, { type: 'linear', count: 2, direction: [0, 1, 0], distance: 10 });
+  assert.throws(() => a.remove(), /P-1 es la fuente de I-1/);
+  assert.throws(() => e.remove(), /es la fuente de I-2/);
+  assert.throws(() => e.explode(), /es la fuente de I-2/);
+  ia.remove();
+  a.remove();
+  ie.detach();
+  e.explode();
+  assert.deepEqual(t.parts.map((p) => p.id).filter((id) => id.startsWith('E')), []);
+});
+
+test('borrar una instancia la saca a ella y a lo de adentro, y la fuente queda', () => {
+  const t = createWorkshop();
+  const e = t.assemble([larguero(t), larguero(t, [0, 0, 50])]);
+  const [i] = t.array(e, { type: 'linear', count: 2, direction: [0, 0, 1], distance: 200 });
+  const interna = i.children[0];
+  i.remove();
+  assert.throws(() => i.vertices, /no existe/);
+  assert.throws(() => interna.vertices, /no existe/);
+  assert.equal(e.children.length, 2);
+  assert.deepEqual(e.instances, []);
+});
+
+test('duplicar un mueble con su cajón y las instancias del cajón: las copias siguen al cajón copiado', () => {
+  const t = createWorkshop();
+  const cajon = t.assemble([larguero(t, [0, 5, 0]), larguero(t, [0, 5, 50])], { name: 'Cajón' });
+  const reps = t.array(cajon, { type: 'linear', count: 3, direction: [0, 1, 0], distance: 40 });
+  const mueble = t.assemble([cajon, ...reps], { name: 'Mueble' });
+  const copia = mueble.duplicate();
+  const inst = copia.children.filter((h) => h.source);
+  const fuente = copia.children.find((h) => !h.source);
+  assert.equal(copia.children.length, 3);
+  assert.equal(inst.length, 2);
+  for (const i of inst) assert.equal(i.source.id, fuente.id, 'siguen al cajón de la copia, no al de afuera');
+  assert.equal(cajon.instances.length, 2, 'las del original, intactas');
+  fuente.pieces[0].resize([250, 4, 10]);
+  assert.equal(inst[0].pieces[0].dims.length, 250);
+  assert.equal(reps[0].pieces[0].dims.length, 200, 'el original no se enteró');
+});
+
+test('duplicar una instancia da otra instancia de la misma fuente', () => {
+  const t = createWorkshop();
+  const a = larguero(t);
+  const i = t.instantiate(a);
+  const c = i.duplicate();
+  assert.notEqual(c.id, i.id);
+  assert.equal(c.source.id, a.id);
+  assert.deepEqual(a.instances.map((x) => x.id), [i.id, c.id]);
+});
+
+test('una instancia dentro de la fuente de otra instancia se resuelve anidada, y sigue a su propia fuente', () => {
+  const t = createWorkshop();
+  const pata = t.addPiece({ size: [4, 40, 4], center: [0, 20, 0] });
+  const [pata2] = t.array(pata, { type: 'linear', count: 2, direction: [1, 0, 0], distance: 30 });
+  const par = t.assemble([pata, pata2], { name: 'Patas' });
+  const [par2] = t.array(par, { type: 'linear', count: 2, direction: [0, 0, 1], distance: 50 });
+  assert.equal(par2.pieces.length, 2);
+  assert.ok(par2.pieces.every((p) => p.id.startsWith(`${par2.id}/`)));
+  assert.deepEqual(pts(par2.vertices), pts(par.vertices.map((v) => v.add([0, 0, 50]))));
+  pata.resize([4, 60, 4]);
+  assert.deepEqual(par2.pieces.map((p) => p.size.y), [60, 60], 'el cambio llega por las dos instancias');
+  assert.equal(par2.pieces.at(-1).source.id, pata2.id);
+});
+
+test('las instancias se guardan y se cargan: toJSON → load → toJSON da lo mismo', () => {
+  const t = createWorkshop();
+  const e = t.assemble([larguero(t, [0, 5, 0]).rotate(45, 'z'), larguero(t, [0, 5, 50])]);
+  e.rotate(30, 'y');
+  const [i] = t.array(e, { type: 'linear', count: 3, direction: [0, 0, 1], distance: 200 });
+  const json = JSON.stringify(t.toJSON());
+  const u = createWorkshop();
+  u.load(JSON.parse(json));
+  assert.equal(JSON.stringify(u.toJSON()), json);
+  assert.deepEqual(pts(u.part(i.id).vertices), pts(i.vertices));
+  assert.equal(u.part(i.id).source.id, e.id);
+  assert.equal(u.instantiate(e).id, 'I-3', 'el contador de ids sigue donde estaba');
+});
+
+test('un documento guardado antes de las instancias se carga, y después se instancia', () => {
+  const t = createWorkshop();
+  const a = larguero(t);
+  const viejo = JSON.parse(JSON.stringify(t.toJSON()));
+  viejo.version = 1;
+  delete viejo.counters.instance;
+  const u = createWorkshop();
+  u.load(viejo);
+  assert.equal(u.instantiate(u.part(a.id)).id, 'I-1');
+});
+
+test('editar la fuente avisa por sus instancias y por lo de adentro; mover una instancia no avisa por la fuente', () => {
+  const t = createWorkshop();
+  const a = larguero(t);
+  const e = t.assemble([a, larguero(t, [0, 0, 50])]);
+  const [i] = t.array(e, { type: 'linear', count: 2, direction: [0, 0, 1], distance: 100 });
+  const ev = [];
+  t.on((x) => ev.push(x));
+  a.resize([210, 4, 10]);
+  const ids = ev.at(-1).ids;
+  for (const esperado of [a.id, i.id, i.children[0].id]) assert.ok(ids.includes(esperado), `falta ${esperado}`);
+  i.move([1, 0, 0]);
+  assert.ok(!ev.at(-1).ids.includes(e.id));
+  assert.ok(!ev.at(-1).ids.includes(a.id));
+});
+
+test('una parte no puede quedar adentro de su propia instancia, ni un documento cargado contenerse a sí mismo', () => {
+  const t = createWorkshop();
+  const e = t.assemble([larguero(t), larguero(t, [0, 0, 50])]);
+  assert.throws(() => t.instantiate(e, { parent: e }), /adentro de sí misma/);
+  const [i] = t.array(e, { type: 'linear', count: 2, direction: [0, 0, 1], distance: 100 });
+  const f = t.assemble([i], { name: 'F' });
+  assert.throws(() => t.instantiate(f, { parent: e }), /adentro de sí misma/, 'también por un camino indirecto');
+  assert.throws(() => t.instantiate(e, { parent: i }), /es una instancia/);
+
+  const marco = { r: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [0, 0, 0] };
+  const antes = t.parts.length;
+  assert.throws(() => t.load({ counters: {}, parts: [
+    { kind: 'assembly', id: 'E-1', name: 'a', parent: null, frame: marco, children: ['I-1'] },
+    { kind: 'instance', id: 'I-1', name: 'i', parent: 'E-1', frame: marco, source: 'E-1' },
+  ] }), /queda adentro de sí mismo/);
+  assert.throws(() => t.load({ counters: {}, parts: [{ kind: 'instance', id: 'I-1', name: 'i', parent: null, frame: marco, source: 'P-9' }] }), /no existe o es otra instancia/);
+  assert.equal(t.parts.length, antes, 'un documento inválido no deja nada a medias');
+});
+
+test('arrayTransforms lineal: fit "span" reparte el largo total; fit "step" manda la separación', () => {
+  const xs = (spec) => arrayTransforms(spec).map((t) => t.translationVector.x);
+  assert.deepEqual(xs({ type: 'linear', count: 4, direction: [1, 0, 0], distance: 90 }), [0, 30, 60, 90]);
+  assert.deepEqual(xs({ type: 'linear', count: 4, direction: [2, 0, 0], distance: 25, fit: 'step' }), [0, 25, 50, 75], 'la dirección se normaliza');
+  assert.deepEqual(xs({ type: 'linear', count: 1, direction: [1, 0, 0], distance: 90 }), [0]);
+  assert.ok(arrayTransforms({ type: 'linear', count: 3, direction: [0, 0, 1], distance: 10 })[0].isIdentity);
+});
+
+test('arrayTransforms en área: count × count2, en las dos direcciones', () => {
+  const ts = arrayTransforms({ type: 'area', count: 2, count2: 3, direction: [1, 0, 0], direction2: [0, 0, 1], distance: 10, distance2: 40 });
+  assert.deepEqual(ts.map((t) => t.translationVector.toArray()), [[0, 0, 0], [0, 0, 20], [0, 0, 40], [10, 0, 0], [10, 0, 20], [10, 0, 40]]);
+});
+
+test('arrayTransforms polar: 360° no repite la primera copia; menos de 360° incluye las dos puntas', () => {
+  const dePunto = (spec, opts) => arrayTransforms(spec, opts).map((t) => new Point3d(10, 0, 0).transform(t).toArray());
+  assert.deepEqual(dePunto({ type: 'polar', count: 4 }), [[10, 0, 0], [0, 10, 0], [-10, 0, 0], [0, -10, 0]], '4 copias = cada 90°, no cada 120°');
+  assert.deepEqual(dePunto({ type: 'polar', count: 3, angle: 180 }), [[10, 0, 0], [0, 10, 0], [-10, 0, 0]]);
+  assert.deepEqual(dePunto({ type: 'polar', count: 3, angle: 90, fit: 'step' }), [[10, 0, 0], [0, 10, 0], [-10, 0, 0]], 'con fit step, angle es lo que gira cada paso');
+  const alrededorDeY = arrayTransforms({ type: 'polar', count: 2, axis: 'y', center: [5, 0, 0] });
+  assert.deepEqual(new Point3d(10, 0, 0).transform(alrededorDeY[1]).toArray(), [0, 0, 0], 'gira por el centro dado');
+});
+
+test('arrayTransforms polar sin orient: cada copia queda paralela a la original, solo cambia de lugar', () => {
+  const ts = arrayTransforms({ type: 'polar', count: 4, orient: false }, { origin: [10, 0, 0] });
+  assert.ok(ts.every((t) => t.frame.r.join() === '1,0,0,0,1,0,0,0,1'), 'sin giro');
+  assert.deepEqual(ts.map((t) => new Point3d(10, 0, 0).transform(t).toArray()), [[10, 0, 0], [0, 10, 0], [-10, 0, 0], [0, -10, 0]]);
+  assert.throws(() => arrayTransforms({ type: 'polar', count: 4, orient: false }), /necesita origin/);
+});
+
+test('array polar de una pieza: con orient gira con el barrido; sin orient queda paralela', () => {
+  const caja = (t, orient) => {
+    const a = t.addPiece({ size: [6, 2, 2], center: [10, 0, 0] });
+    return t.array(a, { type: 'polar', count: 4, orient }).map((c) => c.boundingBox);
+  };
+  const girando = caja(createWorkshop(), true);
+  assert.deepEqual(girando[0].diagonal.toArray(), [2, 6, 2], 'a 90° el largo mira a y');
+  assert.deepEqual(girando[1].diagonal.toArray(), [6, 2, 2], 'a 180° vuelve a x');
+  const paralelas = caja(createWorkshop(), false);
+  for (const b of paralelas) assert.deepEqual(b.diagonal.toArray(), [6, 2, 2]);
+  assert.deepEqual(paralelas.map((b) => b.center.toArray()), [[0, 10, 0], [-10, 0, 0], [0, -10, 0]]);
+});
+
+test('arrayTransforms: errores claros', () => {
+  const lin = { type: 'linear', count: 3, direction: [1, 0, 0], distance: 10 };
+  assert.throws(() => arrayTransforms({ ...lin, count: 0 }), /count inválido/);
+  assert.throws(() => arrayTransforms({ ...lin, count: 2.5 }), /count inválido/);
+  assert.throws(() => arrayTransforms({ ...lin, direction: [0, 0, 0] }), /direction no puede ser nula/);
+  assert.throws(() => arrayTransforms({ ...lin, distance: 'x' }), /distance inválido/);
+  assert.throws(() => arrayTransforms({ ...lin, fit: 'paso' }), /fit inválido/);
+  assert.throws(() => arrayTransforms({ type: 'espiral', count: 3 }), /tipo de matriz inválido/);
+  assert.throws(() => arrayTransforms(null), /la matriz va como/);
+});
+
 // ---------- que el SDK siga siendo puro ----------
 
 test('el SDK no depende de ningún paquete externo ni del navegador (lo puede usar el servidor)', async () => {
   const { readFile } = await import('node:fs/promises');
-  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/index.js', 'examples/demo.js']) {
+  for (const f of ['src/frame.js', 'src/model.js', 'src/contact.js', 'src/geometry.js', 'src/help.js', 'src/array.js', 'src/index.js', 'examples/demo.js']) {
     const src = await readFile(new URL(`../${f}`, import.meta.url), 'utf8');
     const sin = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
     const ext = [...sin.matchAll(/^\s*(?:import|export)[^'"]*?from\s*['"]([^'"]+)['"]/gm)]

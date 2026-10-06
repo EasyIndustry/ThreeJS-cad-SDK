@@ -70,8 +70,8 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
 
   function sync() {
     const vivas = new Set();
-    for (const p of model.parts.values()) {
-      if (p.kind !== 'piece') continue;
+    // las piezas de adentro de una instancia se dibujan como cualquier otra, con su id de camino
+    for (const p of model.allPieces()) {
       vivas.add(p.id);
       const key = JSON.stringify([p.size, p.shape, p.material]);
       let e = mallas.get(p.id);
@@ -103,13 +103,14 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
         if (x instanceof THREE.Mesh || x instanceof THREE.LineSegments) x.geometry.dispose();
       });
     }
-    for (const p of model.parts.values()) {
-      const caja = model.box(p.id, 'world');
+    for (const id of model.parts.keys()) {
+      const p = model.get(id);
+      const caja = model.box(id, 'world');
       const ensamble = p.kind === 'assembly';
       if (ver.axes) {
         const ejes = new THREE.AxesHelper(Math.max(8, Math.min(40, Math.max(...caja.size) * 0.35)));
         ejes.matrixAutoUpdate = false;
-        ejes.matrix.fromArray(toColumns4(model.worldFrame(p.id)));
+        ejes.matrix.fromArray(toColumns4(model.worldFrame(id)));
         capas.add(ejes);
       }
       if (ver.boxes) {
@@ -118,7 +119,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
       if (ver.labels) {
         const div = document.createElement('div');
         div.className = ensamble ? 'cad-label cad-label--assembly' : 'cad-label';
-        div.textContent = `${p.id} · ${p.name}`;
+        div.textContent = `${id} · ${p.name}`;
         const o = new CSS2DObject(div);
         o.position.set(caja.center[0], ensamble ? caja.max[1] + 4 : caja.center[1], caja.center[2]);
         capas.add(o);
@@ -177,7 +178,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
   return {
     /** El grupo que el adaptador cuelga en la escena. */
     group: root,
-    /** Las mallas por id de pieza (para elegir con un raycaster, por ejemplo). */
+    /** Las mallas por id de pieza (para elegir con un raycaster, por ejemplo). Las de adentro de una instancia llevan su id de camino (`I-1/P-2`). */
     meshes: mallas,
     /** Sincroniza ya, sin esperar al próximo cuadro. */
     sync,
