@@ -72,9 +72,30 @@ frena si eso cambia: el núcleo lo puede usar un servidor.
   `CHANGELOG.md` — es lo que alguien vendorizando necesita leer antes de traer una versión
   nueva a su app.
 
-## Release
+## Ramas, pre-releases y releases
 
-1. Bump de versión en `package.json` (semver).
-2. Entrada nueva en `CHANGELOG.md`, con lo que rompe (si rompe algo) en la primera línea.
-3. Tag `vX.Y.Z` sobre el commit del release.
-4. `git push origin <rama>` y `git push origin vX.Y.Z`.
+- **`main`** solo tiene lo publicado: cada commit de `main` con tag `vX.Y.Z` es un release.
+- **`test`** es lo que se está probando en una app antes de publicarlo. El trabajo se hace en
+  ramas propias y, cuando algo está listo para probar, `test` avanza a ese commit.
+- **Pre-release `vX.Y.Z-rc.N`** sobre un commit de `test`: es lo que una app vendoriza para
+  probar. Cada issue que entra suma un rc (`-rc.2`, `-rc.3`…), o abre la versión siguiente.
+- **Release `vX.Y.Z`** sale de `main`, cuando el último rc anduvo bien en la app.
+
+### Publicar un pre-release
+
+1. `package.json` dice la versión del rc (`0.6.0-rc.1`), y `CHANGELOG.md` tiene su entrada
+   (lo que rompe, arriba de todo).
+2. `test` apunta a ese commit.
+3. ```bash
+   gh release create v0.6.0-rc.1 --prerelease --target <sha completo> --title v0.6.0-rc.1 --notes-file <notas>
+   ```
+   `--target` necesita el SHA de 40 caracteres: con uno abreviado, GitHub contesta
+   "target_commitish is invalid".
+
+### Publicar un release
+
+1. PR de `test` a `main`, mergeado **con merge commit o fast-forward, nunca squash**: los tags
+   de los rc tienen que seguir apuntando a commits que estén en `main`.
+2. En `main`, un commit de release: `package.json` pasa a `X.Y.Z` (sin `-rc.N`) y la entrada
+   del CHANGELOG toma la fecha del release.
+3. `gh release create vX.Y.Z --target <sha completo del commit de release> --notes-file <notas>`.

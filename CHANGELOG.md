@@ -2,142 +2,74 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versiones
 según [SemVer](https://semver.org): mientras sea `0.x`, una versión menor puede romper algo,
-y si rompe queda dicho arriba de todo en esa entrada (ver `CONTRIBUTING.md`).
+y si rompe queda dicho arriba de todo en esa entrada. Los pre-releases (`-rc.N`) se prueban
+en una app antes del release (ver `CONTRIBUTING.md`).
 
-## [0.6.0] - 2026-10-06
+## [0.6.0] - sin publicar (pre-release `v0.6.0-rc.1`)
 
-Responde a [#4](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/4): deshacer y rehacer.
-
-### Added
-
-- `taller.undo()`, `taller.redo()`, `taller.canUndo`, `taller.canRedo` y `taller.clearHistory()`.
-  Deshacer vuelve exactamente al documento anterior (marcos, definiciones, ensambles,
-  instancias y contadores de ids): hacer N cosas y deshacer N veces deja `toJSON()` igual.
-- `taller.begin()` / `commit()` / `rollback()` y `taller.transaction(fn)`: varios cambios
-  valen un solo paso. Se anidan.
-- `createWorkshop({ historyLimit })`: cuántos pasos se guardan (100 por defecto; 0: ninguno).
-- Avisos `'undo'`, `'redo'` y `'rollback'` en `on()`, con los ids que cambiaron.
-
-### Changed
-
-- Toda operación es atómica: si falla a mitad de camino, el documento queda como estaba
-  antes de ella (antes podía quedar, por ejemplo, una pieza creada sin su ensamble).
-- `taller.array(...)` es un solo paso de deshacer.
-- Los registros guardados en el modelo son inmutables (están congelados); cada cambio los
-  reemplaza. Quien leía `model.parts` puede seguir leyéndolo, pero ya no puede escribirle
-  encima (nunca fue API; ahora falla).
-- `load()` y `clear()` borran el historial, y no se puede cargar con una transacción abierta.
-
-Nada rompe una llamada existente de la API pública.
-
-## [0.5.0] - 2026-10-06
-
-Unidades y tolerancias: nada del SDK asume centímetros, y las tolerancias salen de un archivo
-de configuración.
+Responde a [#2](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/2),
+[#3](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/3) y
+[#4](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/4), y saca del SDK lo que era de
+una app en particular.
 
 ### Breaking
 
-- **Se sacaron `TOUCH` y `PEN`** (las constantes de tolerancia, que eran 0,2 y 0,15 cm). Ahora
-  la tolerancia sale de `taller.tolerances` (`{ touch, penetration }`), según la unidad del
-  documento. Con la unidad por defecto (cm) los valores son los mismos de antes: 0,2 y 0,15.
-  Quien importaba las constantes tiene que leer `taller.tolerances`.
-- Los textos de `help()` y de `toString()` de `Contact` e `Intersection` ya no dicen "cm" ni
-  "cm²/cm³": dicen "unidades del documento".
+- **Se sacaron `TOUCH` y `PEN`** (las tolerancias de contacto, 0,2 y 0,15 cm). Ahora salen de
+  `taller.tolerances` (`{ touch, penetration }`), según la unidad del documento. Con la unidad
+  por defecto (cm) los valores son los mismos de antes.
+- **El adaptador de three ya no colorea por especie de madera.** Sin `materialFor`, todas las
+  piezas salen de un gris neutro (`#9a9a92`). Una app que dependía del color por defecto
+  tiene que pasar su propio `materialFor`.
+- **`addPiece` sin `material` ya no asume `'pino'`**: el default es `'default'`.
+- **`toJSON()` escribe `version: 3`**, con `units` y partes que pueden ser `kind: 'instance'`.
+  Esta versión carga los documentos de antes (los toma como cm); un documento guardado con
+  ella no lo lee la 0.1.0.
+- Los textos de `help()` y de `toString()` de `Contact` e `Intersection` ya no dicen "cm":
+  dicen "unidades del documento".
+- Los registros que guarda el modelo son inmutables (congelados). Leer `model.parts` sigue
+  andando; escribirle encima, que nunca fue API, ahora falla.
 
 ### Added
 
-- `createWorkshop({ units, tolerances })`: `units` es `'mm' | 'cm' | 'm' | 'in' | 'ft'` (cm si no
-  se dice); `tolerances` pisa lo sugerido, en la unidad del documento. También sigue
-  aceptando un `Model` ya armado.
-- `taller.units` y `taller.tolerances`.
-- `src/units.js` (`UNITS`, `convertLength`) y `src/config.js` (`TOLERANCE_PRESETS`,
-  `tolerancesFor`): los valores sugeridos viven solo en `config.js`, escritos en la unidad
-  natural de cada sistema (métrico: 2 mm y 1,5 mm; imperial: 1/16 in y 3/64 in). Una prueba
-  impide que vuelvan a aparecer fuera de ese archivo.
-- La unidad viaja con el documento: `toJSON()` escribe `version: 3` y `units`; `load()` toma la
-  unidad del documento (uno anterior se carga como cm) y `clear()` la conserva.
+- **Piezas ya orientadas** (#2): `Transform.fromEuler(radians)` (Euler XYZ, la convención de
+  three.js) y `addPiece({ ..., placement, axes })`. `axes` inválidos fallan con un error claro.
+- **Instancias y matrices** (#3): `taller.instantiate(parte, { name?, parent?, placement? })`
+  coloca la misma pieza o el mismo ensamble otra vez, y editar la fuente cambia todas sus
+  instancias. `parte.source`, `parte.instances`, `parte.detach()` (soltar, conservando el id).
+  `taller.array(parte, spec)` y `arrayTransforms(spec)`: lineal, en área y polar
+  (`fit: 'span' | 'step'`, `orient`); `count` cuenta a la original. Lo de adentro de una
+  instancia se lee como piezas con id de camino (`I-1/P-2`), que entran al contacto.
+- **Unidades y tolerancias**: `createWorkshop({ units, tolerances })` con
+  `'mm' | 'cm' | 'm' | 'in' | 'ft'` (cm por defecto); `taller.units`, `taller.tolerances`.
+  Los valores sugeridos viven solo en `src/config.js`, en la unidad natural de cada sistema
+  (2 mm y 1,5 mm; 1/16 in y 3/64 in), y se llevan a la unidad del documento. `src/units.js`
+  (`UNITS`, `convertLength`).
+- **Deshacer y rehacer** (#4): `taller.undo()`, `redo()`, `canUndo`, `canRedo`,
+  `clearHistory()`; `begin()` / `commit()` / `rollback()` y `transaction(fn)` para que varios
+  cambios sean un solo paso; `createWorkshop({ historyLimit })` (100 por defecto). Avisos
+  `'undo'`, `'redo'` y `'rollback'` con los ids que cambiaron.
+- `CONTRIBUTING.md` (el contrato, el criterio de qué es agnóstico, la compatibilidad hacia
+  atrás y el flujo de ramas y releases) y este `CHANGELOG.md`.
 
 ### Changed
 
-- El umbral con que se descarta una cara de contacto "astilla" ya no es un `1e-6` en cm²: es
-  1/200 de la tolerancia de contacto al cuadrado, que da lo mismo en cm y escala bien en
-  otras unidades.
-- Las ayudas visuales del adaptador de three se escalan con la unidad del documento.
-
-## [0.4.0] - 2026-10-06
-
-Responde a [#3](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/3): instanciar una
-parte, y matrices de piezas y de ensambles.
-
-### Changed
-
-- `toJSON()` escribe `version: 2` (en 0.5.0 pasó a 3, ver arriba; puede traer partes `kind: 'instance'`). `load()` sigue
-  leyendo documentos de la versión 1 sin cambios. Un documento con instancias no lo lee una
-  versión anterior del SDK.
+- Toda operación es atómica: si falla a mitad de camino, el documento queda como estaba.
 - `taller.contacts()` y `taller.collisions()` incluyen las piezas de adentro de las
-  instancias (con id de camino, `I-1/P-2`). Sin instancias en el documento, dan lo mismo
-  que antes.
-- El adaptador de three dibuja las piezas de adentro de las instancias; sus mallas llevan el
-  id de camino en `userData.id`.
-
-### Added
-
-- `taller.instantiate(parte, { name?, parent?, placement? })`: la misma pieza o el mismo
-  ensamble colocado otra vez. Editar la fuente (medidas, forma, material, lo de adentro) cambia
-  todas sus instancias.
-- `parte.source` (de quién es copia, o null), `parte.instances` y `parte.detach()` (soltar:
-  pasa a ser una parte de verdad, con el mismo id).
-- `taller.array(parte, spec)` y `arrayTransforms(spec)`: matrices lineal, en área y polar
-  (`fit: 'span' | 'step'`, `orient`). `count` cuenta a la original.
-- Borrar o deshacer (`explode`) la fuente de una instancia falla con un error que dice qué
-  instancias la usan; duplicar un conjunto con una fuente y sus instancias remapea las
-  instancias a la fuente copiada.
-- `load()` rechaza, sin dejar nada a medias, un documento con una instancia sin fuente o con
-  un conjunto que se contiene a sí mismo.
-
-Nada rompe una llamada existente: `duplicate()` sigue dando una copia independiente.
-
-## [0.3.0] - 2026-10-06
-
-Responde a [#2](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/2): crear piezas
-ya orientadas, para importar diseños existentes.
-
-### Added
-
-- `Transform.fromEuler(radians)`: el giro de un Euler XYZ en radianes (`Rx · Ry · Rz`), la
-  misma convención que usa three.js para `Euler('XYZ')`. Sin traslación.
-- `addPiece({ ..., placement, axes })`: `placement` (un `Transform`) orienta la pieza al
-  crearla, en vez de crearla derecha y girarla después; `axes` fuerza cuál eje local es el
-  largo, el ancho y el espesor (por tamaño si no se da). `axes` inválidos (que no sean 0,
-  1, 2 sin repetir) tiran un error claro.
-
-Nada de esto rompe una llamada existente: los dos campos son opcionales y el
-comportamiento sin ellos es el mismo que antes.
-
-## [0.2.0] - 2026-10-06
-
-### Breaking
-
-- El adaptador de three (`adapters/three/viewer.js`) ya no trae una tabla de colores por
-  especie de madera. Si no se pasa `materialFor`, todas las piezas salen de un gris neutro
-  (`#9a9a92`) en vez de variar por `material`. Cualquier app que dependía del color por
-  defecto tiene que pasar su propio `materialFor` ahora.
-- `addPiece` sin `material` ya no asume `'pino'`: el default es `'default'`. Una app que
-  lee `pieza.material` esperando `'pino'` por defecto tiene que pasarlo explícito.
+  instancias. Sin instancias, dan lo mismo que antes.
+- No se borra ni se deshace (`explode`) la fuente de una instancia: el error dice cuáles la
+  usan. `duplicate()` de un conjunto con una fuente y sus instancias remapea las instancias a
+  la fuente copiada.
+- `load()` valida antes de reemplazar nada (instancia sin fuente, conjuntos que se contienen
+  a sí mismos) y borra el historial; `clear()` borra el historial y conserva la unidad.
+- El umbral con que se descarta una cara de contacto "astilla" es (tolerancia / 200)², en vez
+  de un `1e-6` fijo en cm².
+- El adaptador de three dibuja las piezas de adentro de las instancias (con su id de camino en
+  `userData.id`) y escala sus ayudas visuales con la unidad del documento.
 
 ### Removed
 
-- `lab/index.html`: la consola de prueba manual. Tenía nombre y tema de "Taller de
-  carpintería", específico de una app, y nunca se vendorizaba (ya estaba fuera de `files`
-  en `package.json`). El testeo visual manual queda del lado de cada app que vendoriza el
-  SDK, con su propia escena.
-
-### Added
-
-- `CONTRIBUTING.md`: el contrato de geometría, el flujo para agregar una feature, el
-  criterio de qué es agnóstico y la política de compatibilidad hacia atrás, movidos del
-  README y ampliados.
-- `CHANGELOG.md` (este archivo).
+- `lab/index.html`, la consola de prueba manual: tenía nombre y tema de una app de carpintería
+  y nunca se vendorizaba. El testeo visual queda del lado de cada app.
 
 ## [0.1.0] - 2026-10-06
 
@@ -145,9 +77,5 @@ Primera versión. El núcleo puro (documento, partes, marcos, geometría, contac
 intersección, con `help()` verificado por test) y el adaptador de three que espeja el
 modelo en una escena.
 
-[0.6.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.1.0...v0.2.0
+[0.6.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.1.0...test
 [0.1.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/releases/tag/v0.1.0
