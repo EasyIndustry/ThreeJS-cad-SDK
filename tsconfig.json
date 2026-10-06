@@ -1,0 +1,22 @@
+{
+  // Tipado sin build: TypeScript solo verifica (noEmit), como un linter. Los archivos son
+  // .js con tipos en JSDoc, y el navegador los carga tal cual.
+  //
+  //   npm run typecheck
+  //
+  // Cubre el núcleo y los ejemplos, en modo estricto. El adaptador de three queda afuera:
+  // verificarlo pediría instalar los tipos de three, y el núcleo no depende de three.
+  "compilerOptions": {
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM"],
+    "types": [],
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.js", "examples/**/*.js"]
+}
