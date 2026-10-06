@@ -18,6 +18,7 @@
 import { frame, compose, invert, apply, rotate, turn, transpose3, isQuarterTurn, axisIndex } from './frame.js';
 
 /** @typedef {import('./frame.js').Vec3} Vec3 */
+/** @typedef {import('./frame.js').Mat3} Mat3 */
 /** @typedef {import('./frame.js').Frame} Frame */
 /** @typedef {import('./frame.js').Axis} Axis */
 /** @typedef {'local' | 'world'} Space */
@@ -62,6 +63,15 @@ export function axesBySize(size) {
 }
 
 const clone = (/** @type {any} */ v) => JSON.parse(JSON.stringify(v));
+
+/** @param {Axes} axes @returns {Axes} */
+function checkAxes(axes) {
+  const vals = [axes.length, axes.width, axes.thickness];
+  if (!vals.every((v) => v === 0 || v === 1 || v === 2) || new Set(vals).size !== 3) {
+    throw new Error(`ejes inválidos: ${JSON.stringify(axes)} (van length, width, thickness con 0, 1 y 2, sin repetir)`);
+  }
+  return { length: axes.length, width: axes.width, thickness: axes.thickness };
+}
 
 export class Model {
   constructor() {
@@ -261,11 +271,13 @@ export class Model {
 
   /**
    * @param {{ name?: string, size: Vec3, material?: string, shape?: object | null,
-   *           at?: Vec3, axes?: Axes, parent?: string | null }} spec
+   *           at?: Vec3, r?: Mat3, axes?: Axes, parent?: string | null }} spec
    *   `at`: dónde queda su centro, en el espacio del padre (el mundo si no tiene).
+   *   `r`: su rotación inicial en ese mismo espacio (identidad si no se da), para crearla ya
+   *   orientada en vez de crearla derecha y rotarla después.
    * @returns {string} el id
    */
-  addPiece({ name, size, material = 'default', shape = null, at = [0, 0, 0], axes, parent = null }) {
+  addPiece({ name, size, material = 'default', shape = null, at = [0, 0, 0], r, axes, parent = null }) {
     if (!Array.isArray(size) || size.length !== 3 || size.some((s) => !(s > 0))) {
       throw new Error(`medidas inválidas: ${JSON.stringify(size)} (van tres números > 0, en cm)`);
     }
@@ -273,7 +285,7 @@ export class Model {
     /** @type {PieceDef} */
     const p = {
       kind: 'piece', id, name: name || `Pieza ${this.counters.piece}`, parent: null,
-      frame: frame(at), size: [...size], axes: axes ? { ...axes } : axesBySize(size),
+      frame: frame(at, r), size: [...size], axes: axes ? checkAxes(axes) : axesBySize(size),
       material, shape: shape ? clone(shape) : null,
     };
     this.parts.set(id, p);

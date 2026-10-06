@@ -4,6 +4,23 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 según [SemVer](https://semver.org): mientras sea `0.x`, una versión menor puede romper algo,
 y si rompe queda dicho arriba de todo en esa entrada (ver `CONTRIBUTING.md`).
 
+## [0.3.0] - 2026-10-06
+
+Responde a [#2](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/2): crear piezas
+ya orientadas, para importar diseños existentes.
+
+### Added
+
+- `Transform.fromEuler(radians)`: el giro de un Euler XYZ en radianes (`Rx · Ry · Rz`), la
+  misma convención que usa three.js para `Euler('XYZ')`. Sin traslación.
+- `addPiece({ ..., placement, axes })`: `placement` (un `Transform`) orienta la pieza al
+  crearla, en vez de crearla derecha y girarla después; `axes` fuerza cuál eje local es el
+  largo, el ancho y el espesor (por tamaño si no se da). `axes` inválidos (que no sean 0,
+  1, 2 sin repetir) tiran un error claro.
+
+Nada de esto rompe una llamada existente: los dos campos son opcionales y el
+comportamiento sin ellos es el mismo que antes.
+
 ## [0.2.0] - 2026-10-06
 
 ### Breaking
@@ -35,5 +52,6 @@ Primera versión. El núcleo puro (documento, partes, marcos, geometría, contac
 intersección, con `help()` verificado por test) y el adaptador de three que espeja el
 modelo en una escena.
 
+[0.3.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/EasyIndustry/ThreeJS-cad-SDK/releases/tag/v0.1.0

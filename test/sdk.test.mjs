@@ -341,6 +341,45 @@ test('el puente con Euler XYZ: fromEuler gira igual que la convención de THREE.
   }
 });
 
+// ---------- crear piezas ya orientadas (para importar diseños existentes) ----------
+
+test('Transform.fromEuler + addPiece({ placement }): la pieza nace con las mismas esquinas que rotatePoint', () => {
+  const t = createWorkshop();
+  const e = [0.3, -0.6, 1.1]; // radianes
+  const size = [20, 8, 4];
+  const center = [10, -5, 3];
+  const p = t.addPiece({ size, center, placement: Transform.fromEuler(e) });
+  const half = size.map((s) => s / 2);
+  /** @type {number[][]} */
+  const esquinas = [];
+  for (const x of [-half[0], half[0]]) for (const y of [-half[1], half[1]]) for (const z of [-half[2], half[2]]) esquinas.push([x, y, z]);
+  const esperadas = esquinas.map((c) => {
+    const [x, y, z] = rotatePoint(c, e);
+    return [x + center[0], y + center[1], z + center[2]];
+  });
+  const comoStr = (v) => v.map((n) => Math.round(n * 1e6) / 1e6).join(',');
+  assert.deepEqual(pts(p.vertices), esperadas.map(comoStr).sort());
+});
+
+test('addPiece({ axes }) se respeta, aunque contradiga el orden por tamaño', () => {
+  const t = createWorkshop();
+  // por tamaño: el eje 1 (100) sería el largo. Se lo pedimos al revés: el 2 (10, el más chico).
+  const p = t.addPiece({ size: [50, 100, 10], axes: { length: 2, width: 0, thickness: 1 } });
+  assert.deepEqual(p.dims, { length: 10, width: 50, thickness: 100 });
+});
+
+test('addPiece({ axes }) inválidos: error claro', () => {
+  const t = createWorkshop();
+  assert.throws(() => t.addPiece({ size: [10, 10, 10], axes: { length: 0, width: 0, thickness: 1 } }), /ejes inválidos/);
+});
+
+test('Transform.fromEuler en el polo (ry = 90°) no rompe nada', () => {
+  const t = createWorkshop();
+  const p = t.addPiece({ size: [10, 4, 6], placement: Transform.fromEuler([0, Math.PI / 2, 0.4]) });
+  assert.equal(p.vertices.length, 8);
+  assert.ok(p.vertices.every((v) => [v.x, v.y, v.z].every(Number.isFinite)));
+});
+
 // ---------- guardar, eventos, demo ----------
 
 test('guardar y cargar devuelve el mismo documento', () => {
@@ -366,7 +405,7 @@ test('los eventos avisan qué partes cambiaron (de acá se cuelga el visor)', ()
   assert.deepEqual(ev.at(-1).ids, [e, a, b], 'transformar un ensamble avisa también por sus piezas');
 });
 
-test('la demo del laboratorio: el bastidor repetido es idéntico al original, corrido', async () => {
+test('la demo (examples/demo.js): el bastidor repetido es idéntico al original, corrido', async () => {
   const { demo } = await import('../examples/demo.js');
   const t = createWorkshop();
   const { bastidor, copia } = demo(t);

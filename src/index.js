@@ -319,11 +319,19 @@ export function createWorkshop(model = new Model()) {
     Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection,
     /**
      * Una pieza nueva.
-     * @param {{ name?: string, size: PointLike, material?: string, shape?: object | null, center?: PointLike }} spec
+     * @param {{ name?: string, size: PointLike, material?: string, shape?: object | null,
+     *           center?: PointLike, placement?: Transform, axes?: { length: 0|1|2, width: 0|1|2, thickness: 0|1|2 } }} spec
      *   size: largo de cada eje local, en cm. center: dónde queda su centro (el origen si no se dice).
+     *   placement: la orienta al crearla, en vez de crearla derecha y girarla después (p. ej.
+     *   `Transform.fromEuler([rx, ry, rz])`, para importar un diseño que guarda Euler).
+     *   axes: cuál eje local es el largo, el ancho y el espesor; por tamaño si no se dice.
      */
-    addPiece({ name, size, material, shape, center = [0, 0, 0] }) {
-      const id = model.addPiece({ name, size: vec3(size, 'medidas'), material, shape, at: vec3(center, 'centro') });
+    addPiece({ name, size, material, shape, center = [0, 0, 0], placement, axes }) {
+      const id = model.addPiece({
+        name, size: vec3(size, 'medidas'), material, shape, at: vec3(center, 'centro'),
+        r: placement ? Transform.check(placement).frame.r : undefined,
+        axes,
+      });
       return /** @type {Piece} */ (c.part(id));
     },
     /**
@@ -361,7 +369,7 @@ export function createWorkshop(model = new Model()) {
 
 /** @type {Member[]} */
 export const WORKSHOP_MEMBERS = [
-  ['addPiece({ name?, size, material?, shape?, center? })', 'una pieza nueva: size en cm sobre sus ejes locales'],
+  ['addPiece({ name?, size, material?, shape?, center?, placement?, axes? })', 'una pieza nueva: size en cm sobre sus ejes locales; placement (Transform) la orienta al crearla; axes fuerza cuál eje es el largo, el ancho y el espesor'],
   ['assemble(parts, { name? })', 'un ensamble con esas partes hermanas; se anida, no se aplasta'],
   ['part(id)', 'una parte por su id'],
   ['parts', 'todas las partes'],

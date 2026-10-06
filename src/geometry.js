@@ -10,7 +10,7 @@
 // a un array de lo que sea.
 //
 // Medidas en cm, ángulos en grados. Este módulo no importa three ni DOM.
-import { frame, compose, invert, apply as applyFrame, rotate as rotateVec, turn, isQuarterTurn, toEuler } from './frame.js';
+import { frame, compose, invert, apply as applyFrame, rotate as rotateVec, turn, isQuarterTurn, toEuler, fromEuler } from './frame.js';
 import { help } from './help.js';
 
 /** @typedef {import('./frame.js').Vec3} Vec3 */
@@ -374,6 +374,16 @@ export class Transform {
   }
 
   /**
+   * El giro de un Euler XYZ en radianes, aplicado como `Rx · Ry · Rz` (primero z, después
+   * y, al final x): la misma convención que `THREE.Euler 'XYZ'`. Sin traslación — para
+   * crear una pieza ya orientada, pasalo junto con `center` a `addPiece`.
+   * @param {VectorLike} radians
+   */
+  static fromEuler(radians) {
+    return new Transform(frame([0, 0, 0], fromEuler(vec3(radians, 'Euler'))));
+  }
+
+  /**
    * Aplica la transformación a todo lo del array: puntos, vectores, líneas, piezas,
    * ensambles. Devuelve lo transformado (valores nuevos, o las mismas partes). Si en el
    * array está un ensamble y también algo de adentro, lo de adentro no se mueve dos veces:
@@ -427,6 +437,7 @@ export class Transform {
     ['static identity()', 'la que no hace nada'],
     ['static translation(v) / translation(from, to)', 'trasladar por un vector, o de un punto a otro'],
     ['static rotation(degrees, axis?, center?)', "girar en grados; eje 'x' | 'y' | 'z' o un vector; centro por defecto el origen"],
+    ['static fromEuler(radians)', "el giro de un Euler XYZ en radianes (Rx · Ry · Rz), la convención 'XYZ' de three.js; sin traslación"],
     ['static apply(t, items)', 'aplicarla a todo un array (piezas, ensambles, puntos…)'],
     ['static check(t)', 'falla con un mensaje claro si t no es un Transform'],
     ['frame', 'la matriz por dentro: { r (3×3 por filas), t }'],
