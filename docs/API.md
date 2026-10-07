@@ -1,4 +1,4 @@
-# Referencia de la API — threejs-cad-sdk 0.7.0-rc.1
+# Referencia de la API — threejs-cad-sdk 0.7.0
 
 > Generada por `scripts/docs.mjs` desde las tablas de `help()`, que una prueba verifica contra el código. No se edita a mano: `npm run docs`.
 > Para entender cómo se usa cada cosa, el [README](https://github.com/EasyIndustry/ThreeJS-cad-SDK#readme). Para buscar, la [versión con buscador](index.html).

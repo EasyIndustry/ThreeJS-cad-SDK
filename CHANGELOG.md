@@ -5,7 +5,10 @@ según [SemVer](https://semver.org): mientras sea `0.x`, una versión menor pued
 y si rompe queda dicho arriba de todo en esa entrada. Los pre-releases (`-rc.N`) se prueban
 en una app antes del release (ver `CONTRIBUTING.md`).
 
-## [0.7.0] - sin publicar (pre-release `v0.7.0-rc.1`)
+## [0.7.0] - 2026-10-07
+
+Primer release después de la 0.1.0: trae también todo lo de la 0.6.0, que se probó como
+pre-release (`v0.6.0-rc.1`) pero no salió como release. Probado en la app como `v0.7.0-rc.1`.
 
 Responde a [#6](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/6) (la pieza es su
 bruto más una lista de operaciones, y la forma que resulta es un cálculo) y
@@ -107,7 +110,7 @@ torneados y su geometría), [#8](https://github.com/EasyIndustry/ThreeJS-cad-SDK
   kernel), dibuja la caja y deja el motivo en `geometry.userData.solidError`.
 - `dims`, la caja y el contacto siguen siendo los del bruto.
 
-## [0.6.0] - sin publicar (pre-release `v0.6.0-rc.1`)
+## [0.6.0] - no salió como release (pre-release `v0.6.0-rc.1`; su contenido salió en la 0.7.0)
 
 Responde a [#2](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/2),
 [#3](https://github.com/EasyIndustry/ThreeJS-cad-SDK/issues/3) y
