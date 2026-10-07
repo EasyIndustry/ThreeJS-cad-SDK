@@ -2,8 +2,6 @@
 // bastidor con una diagonal girada 45°, ensamblado, parado, girado entero y repetido. En el
 // modelo viejo girar el ensamble reescribía las medidas de sus piezas y repetirlo obligaba
 // a rearmarlo de cero; acá son cuatro llamadas.
-//
-// Desde la consola del laboratorio (lab/index.html): demo()
 
 /** @param {ReturnType<typeof import('../src/index.js').createWorkshop>} t */
 export function demo(t) {

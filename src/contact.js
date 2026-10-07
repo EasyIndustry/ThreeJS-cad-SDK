@@ -10,17 +10,14 @@
 //   - touches: ¿se tocan sin meterse? Ahí va cola, un tornillo, un tarugo.
 //   - contacts: ¿dónde se tocan? Una cara (con su polígono y su área), una arista o un punto.
 //
-// Las tolerancias son las del modelo viejo, para no contradecir al taller: dos piezas se
-// tocan si están a 0,2 cm o menos (core/placement.js: TOUCH), y se meten una en otra si
-// la penetración pasa de 0,15 cm (PEN).
+// Las tolerancias no se escriben acá: vienen de afuera, en la unidad del documento (los
+// valores sugeridos viven en config.js). Dos piezas se tocan si están a `tol` o menos, y se
+// meten una en otra si la penetración pasa del umbral de penetración.
 //
 // Puro: no importa three ni DOM.
 /** @typedef {import('./frame.js').Vec3} Vec3 */
 /** @typedef {import('./model.js').Model} Model */
 /** @typedef {import('./model.js').PieceDef} PieceDef */
-
-export const TOUCH = 0.2;
-export const PEN = 0.15;
 
 /**
  * Una caja orientada en el mundo: centro, sus tres ejes (unitarios) y medio largo por eje.
@@ -49,7 +46,7 @@ export function obbOf(m, id) {
   };
 }
 
-/** La misma caja, `d` cm más grande hacia cada lado. @param {OBB} b @param {number} d @returns {OBB} */
+/** La misma caja, `d` (en la unidad del documento) más grande hacia cada lado. @param {OBB} b @param {number} d @returns {OBB} */
 const inflate = (b, d) => ({ ...b, h: [b.h[0] + d, b.h[1] + d, b.h[2] + d] });
 
 /** Sus 6 planos, con la normal hacia afuera: un punto está adentro si n·x ≤ d. @param {OBB} b */
@@ -176,6 +173,8 @@ export function intersectBoxes(a, b) {
 export function contactsOf(a, b, tol) {
   /** @type {ReturnType<typeof contactsOf>} */
   const out = [];
+  // una cara de contacto más angosta que 1/200 de la tolerancia es una astilla, no una cara
+  const sliver = Math.max(1e-12, (tol / 200) ** 2);
   const fa = faces(a), fb = faces(b);
   for (const x of fa) {
     for (const y of fb) {
@@ -194,7 +193,7 @@ export function contactsOf(a, b, tol) {
       }
       if (poly.length < 3) continue;
       const ar = area(poly);
-      if (ar < 1e-6) continue; // una astilla de área nula: eso es una arista, se ve abajo
+      if (ar < sliver) continue; // una astilla de área casi nula: eso es una arista, se ve abajo
       const medio = mul(x.n, gap / 2);
       out.push({ kind: 'face', points: poly.map((q) => add(q, medio)), area: ar, normal: x.n, faceA: { axis: x.axis, side: x.side }, faceB: { axis: y.axis, side: y.side } });
     }

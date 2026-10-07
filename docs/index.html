@@ -1,0 +1,1422 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>threejs-cad-sdk · Referencia de la API</title>
+<meta name="description" content="Referencia de la API de threejs-cad-sdk 0.7.0: piezas, ensambles, relaciones, contacto y geometría, para apps de three.js.">
+<!-- Generado por scripts/docs.mjs desde las tablas de help(). No se edita a mano: npm run docs -->
+<style>
+:root {
+  --bg: #fbfaf7; --panel: #f3f1ec; --text: #23201b; --muted: #6b655b; --line: #e3dfd6;
+  --accent: #a84a1f; --accent-soft: #f6e4da; --code: #2b2620; --mark: #ffe08a; --mark-text: #23201b;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #171512; --panel: #201d19; --text: #ece7de; --muted: #a59d90; --line: #332f29;
+    --accent: #f08a5d; --accent-soft: #3a2519; --code: #f3eee6; --mark: #7a5c00; --mark-text: #fff6dc;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #171512; --panel: #201d19; --text: #ece7de; --muted: #a59d90; --line: #332f29;
+  --accent: #f08a5d; --accent-soft: #3a2519; --code: #f3eee6; --mark: #7a5c00; --mark-text: #fff6dc;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: 88px; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 var(--sans); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { font-family: var(--mono); font-size: 0.92em; color: var(--code); }
+p code, .doc code { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+mark { background: var(--mark); color: var(--mark-text); border-radius: 2px; padding: 0 1px; }
+.top { position: sticky; top: 0; z-index: 2; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
+.top .in { max-width: 1180px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.marca { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.marca b { font-size: 17px; letter-spacing: -0.01em; }
+.marca .ver { font: 12px var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+.buscar { flex: 1 1 280px; position: relative; }
+.buscar input { width: 100%; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px 9px 34px; outline: none; }
+.buscar input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.buscar svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+.buscar kbd { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+.buscar input:not(:placeholder-shown) ~ kbd { display: none; }
+.links { display: flex; gap: 14px; font-size: 14px; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 16px; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 32px; }
+nav { position: sticky; top: 70px; align-self: start; max-height: calc(100vh - 80px); overflow: auto; padding: 20px 0 40px; }
+nav ul { list-style: none; margin: 0; padding: 0; }
+nav li.grupo { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 16px 0 4px; }
+nav li.grupo:first-child { margin-top: 0; }
+nav a { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 3px 8px; border-radius: 6px; color: var(--text); font-size: 14px; }
+nav a:hover { background: var(--panel); text-decoration: none; }
+nav a.activo { background: var(--accent-soft); color: var(--accent); }
+nav .n { color: var(--muted); font: 12px var(--mono); }
+nav a.vacio { opacity: 0.35; }
+main { padding: 20px 0 80px; min-width: 0; }
+.estado { color: var(--muted); font-size: 14px; margin: 0 0 8px; min-height: 1.5em; }
+section { border-top: 1px solid var(--line); padding: 28px 0 12px; }
+section:first-of-type { border-top: 0; padding-top: 4px; }
+section header .grupo { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+h2 { margin: 2px 0 2px; font-size: 26px; letter-spacing: -0.02em; }
+h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 20px 0 6px; }
+.tag { margin: 0 0 8px; color: var(--muted); }
+.intro, .hereda { margin: 6px 0; max-width: 70ch; }
+.lista, .valores { margin-top: 10px; }
+.m { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 4px 24px; padding: 9px 0; border-bottom: 1px dashed var(--line); }
+.m:last-child { border-bottom: 0; }
+.m:target { background: var(--accent-soft); border-radius: 6px; }
+.sig { color: var(--text); overflow-wrap: anywhere; }
+.sig code { font-weight: 600; }
+.doc { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.oculto { display: none !important; }
+.nada { padding: 40px 0; color: var(--muted); }
+footer { color: var(--muted); font-size: 13px; padding: 24px 0 0; border-top: 1px solid var(--line); }
+@media (max-width: 860px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  nav { position: static; max-height: none; padding: 12px 0 0; }
+  nav ul { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; }
+  nav li.grupo { display: none; }
+  nav a { white-space: nowrap; border: 1px solid var(--line); }
+  .m { grid-template-columns: minmax(0, 1fr); }
+  .links, .buscar kbd { display: none; }
+  html { scroll-padding-top: 120px; }
+}
+</style>
+</head>
+<body>
+<div class="top"><div class="in">
+  <div class="marca"><b>threejs-cad-sdk</b><span class="ver">0.7.0</span></div>
+  <label class="buscar"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="q" type="search" placeholder="Buscar en 270 miembros: addPiece, contacto, bisagra…" autocomplete="off" spellcheck="false" aria-label="Buscar en la API"><kbd>/</kbd></label>
+  <div class="links"><a href="https://github.com/EasyIndustry/ThreeJS-cad-SDK#readme">Guía</a><a href="API.md">Markdown</a><a href="https://github.com/EasyIndustry/ThreeJS-cad-SDK/blob/main/CHANGELOG.md">Cambios</a><a href="https://github.com/EasyIndustry/ThreeJS-cad-SDK">GitHub</a></div>
+</div></div>
+<div class="wrap">
+<nav aria-label="Secciones"><ul>
+<li class="grupo">Para empezar</li><li><a href="#module" data-sec="module">Módulo<span class="n">17</span></a></li>
+<li><a href="#workshop" data-sec="workshop">Workshop<span class="n">42</span></a></li>
+<li class="grupo">Partes</li><li><a href="#part" data-sec="part">Part<span class="n">27</span></a></li>
+<li><a href="#piece" data-sec="piece">Piece<span class="n">16</span></a></li>
+<li><a href="#assembly" data-sec="assembly">Assembly<span class="n">7</span></a></li>
+<li class="grupo">Relaciones</li><li><a href="#relation" data-sec="relation">Relation<span class="n">12</span></a></li>
+<li><a href="#joint" data-sec="joint">Joint<span class="n">7</span></a></li>
+<li><a href="#fixing" data-sec="fixing">Fixing<span class="n">9</span></a></li>
+<li><a href="#link" data-sec="link">Link<span class="n">6</span></a></li>
+<li class="grupo">Valores</li><li><a href="#point3d" data-sec="point3d">Point3d<span class="n">13</span></a></li>
+<li><a href="#vector3d" data-sec="vector3d">Vector3d<span class="n">20</span></a></li>
+<li><a href="#line" data-sec="line">Line<span class="n">9</span></a></li>
+<li><a href="#boundingbox" data-sec="boundingbox">BoundingBox<span class="n">12</span></a></li>
+<li><a href="#face" data-sec="face">Face<span class="n">12</span></a></li>
+<li><a href="#transform" data-sec="transform">Transform<span class="n">17</span></a></li>
+<li><a href="#contact" data-sec="contact">Contact<span class="n">12</span></a></li>
+<li><a href="#intersection" data-sec="intersection">Intersection<span class="n">10</span></a></li>
+<li><a href="#mesh" data-sec="mesh">Mesh<span class="n">14</span></a></li>
+<li class="grupo">Adaptador</li><li><a href="#three" data-sec="three">createThreeView<span class="n">8</span></a></li>
+</ul></nav>
+<main>
+<p class="estado" id="estado" aria-live="polite"></p>
+<section id="module" data-sec="module">
+<header><p class="grupo">Para empezar</p><h2>Módulo</h2><p class="tag">lo que se importa de 'threejs-cad-sdk'</p>
+<p class="intro">Todo sale de <code>createWorkshop()</code>: el documento, con sus partes, sus relaciones y su historial. Las medidas son números en la unidad del documento; los ángulos, en grados.</p></header>
+<div class="lista">
+<div class="m" id="module.createWorkshop" data-q="modulo lo que se importa de 'threejs-cad-sdk' createworkshop({ units?, tolerances?, historylimit?, kernel?, sections? }) un documento nuevo (el workshop): la puerta de entrada a todo. units: 'mm' | 'cm' | 'm' | 'in' | 'ft' (cm); tolerances pisa las sugeridas; historylimit, cuantos pasos se deshacen (100); kernel { intersect, subtract } para mallas mas limpias; sections, perfiles propios. tambien acepta un model ya armado">
+<a class="sig" href="#module.createWorkshop"><code>createWorkshop({ units?, tolerances?, historyLimit?, kernel?, sections? })</code></a>
+<p class="doc">un documento nuevo (el Workshop): la puerta de entrada a todo. units: 'mm' | 'cm' | 'm' | 'in' | 'ft' (cm); tolerances pisa las sugeridas; historyLimit, cuántos pasos se deshacen (100); kernel { intersect, subtract } para mallas más limpias; sections, perfiles propios. También acepta un Model ya armado</p>
+</div>
+<div class="m" id="module.Part" data-q="modulo lo que se importa de 'threejs-cad-sdk' part  piece  assembly las partes del documento: part es lo comun, piece una pieza (lo que se corta), assembly un conjunto de partes. no se construyen a mano: salen del workshop">
+<a class="sig" href="#module.Part"><code>Part  Piece  Assembly</code></a>
+<p class="doc">las partes del documento: Part es lo común, Piece una pieza (lo que se corta), Assembly un conjunto de partes. No se construyen a mano: salen del Workshop</p>
+</div>
+<div class="m" id="module.Relation" data-q="modulo lo que se importa de 'threejs-cad-sdk' relation  joint  fixing  link las relaciones entre partes: relation es lo comun; joint una junta (bisagra o corredera), fixing una union, link un vinculo. salen del workshop">
+<a class="sig" href="#module.Relation"><code>Relation  Joint  Fixing  Link</code></a>
+<p class="doc">las relaciones entre partes: Relation es lo común; Joint una junta (bisagra o corredera), Fixing una unión, Link un vínculo. Salen del Workshop</p>
+</div>
+<div class="m" id="module.Point3d" data-q="modulo lo que se importa de 'threejs-cad-sdk' point3d  vector3d  line  boundingbox  face  transform  contact  intersection  mesh las clases de valores: inmutables, sin identidad. lo que se consulta de una parte">
+<a class="sig" href="#module.Point3d"><code>Point3d  Vector3d  Line  BoundingBox  Face  Transform  Contact  Intersection  Mesh</code></a>
+<p class="doc">las clases de valores: inmutables, sin identidad. Lo que se consulta de una parte</p>
+</div>
+<div class="m" id="module.sameFeature" data-q="modulo lo que se importa de 'threejs-cad-sdk' samefeature(a, b) ¿dos resultados de closest() son el mismo rasgo de la misma pieza? (para no redibujar mientras el cursor sigue sobre lo mismo)">
+<a class="sig" href="#module.sameFeature"><code>sameFeature(a, b)</code></a>
+<p class="doc">¿dos resultados de closest() son el mismo rasgo de la misma pieza? (para no redibujar mientras el cursor sigue sobre lo mismo)</p>
+</div>
+<div class="m" id="module.arrayTransforms" data-q="modulo lo que se importa de 'threejs-cad-sdk' arraytransforms(spec, { origin? }) las transformaciones de una matriz lineal, en area o polar ({ type: 'linear' | 'area' | 'polar', count, … }); la 0 es la identidad">
+<a class="sig" href="#module.arrayTransforms"><code>arrayTransforms(spec, { origin? })</code></a>
+<p class="doc">las transformaciones de una matriz lineal, en área o polar ({ type: 'linear' | 'area' | 'polar', count, … }); la 0 es la identidad</p>
+</div>
+<div class="m" id="module.convertLength" data-q="modulo lo que se importa de 'threejs-cad-sdk' convertlength(value, from, to) llevar una medida de una unidad a otra">
+<a class="sig" href="#module.convertLength"><code>convertLength(value, from, to)</code></a>
+<p class="doc">llevar una medida de una unidad a otra</p>
+</div>
+<div class="m" id="module.tolerancesFor" data-q="modulo lo que se importa de 'threejs-cad-sdk' tolerancesfor(unit, overrides?) las tolerancias sugeridas para una unidad, con lo que se pise: { touch, penetration, grab, snap, minlength }">
+<a class="sig" href="#module.tolerancesFor"><code>tolerancesFor(unit, overrides?)</code></a>
+<p class="doc">las tolerancias sugeridas para una unidad, con lo que se pise: { touch, penetration, grab, snap, minLength }</p>
+</div>
+<div class="m" id="module.UNITS" data-q="modulo lo que se importa de 'threejs-cad-sdk' units las unidades que se pueden usar, con su sistema y cuantos mm miden">
+<a class="sig" href="#module.UNITS"><code>UNITS</code></a>
+<p class="doc">las unidades que se pueden usar, con su sistema y cuántos mm miden</p>
+</div>
+<div class="m" id="module.TOLERANCE_PRESETS" data-q="modulo lo que se importa de 'threejs-cad-sdk' tolerance_presets las tolerancias sugeridas de cada sistema, en su unidad natural (las lleva a la del documento tolerancesfor)">
+<a class="sig" href="#module.TOLERANCE_PRESETS"><code>TOLERANCE_PRESETS</code></a>
+<p class="doc">las tolerancias sugeridas de cada sistema, en su unidad natural (las lleva a la del documento tolerancesFor)</p>
+</div>
+<div class="m" id="module.GRAB_RATIO" data-q="modulo lo que se importa de 'threejs-cad-sdk' grab_ratio la franja del agarre en cada eje de una pieza no pasa de esta proporcion de su largo">
+<a class="sig" href="#module.GRAB_RATIO"><code>GRAB_RATIO</code></a>
+<p class="doc">la franja del agarre en cada eje de una pieza no pasa de esta proporción de su largo</p>
+</div>
+<div class="m" id="module.OPERATION_KINDS" data-q="modulo lo que se importa de 'threejs-cad-sdk' operation_kinds las operaciones que se le pueden hacer al bruto de una pieza">
+<a class="sig" href="#module.OPERATION_KINDS"><code>OPERATION_KINDS</code></a>
+<p class="doc">las operaciones que se le pueden hacer al bruto de una pieza</p>
+</div>
+<div class="m" id="module.SECTIONS" data-q="modulo lo que se importa de 'threejs-cad-sdk' sections las secciones de perfil que trae el sdk: { nombre: (params, ancho, alto) =&gt; seccion }">
+<a class="sig" href="#module.SECTIONS"><code>SECTIONS</code></a>
+<p class="doc">las secciones de perfil que trae el SDK: { nombre: (params, ancho, alto) =&gt; sección }</p>
+</div>
+<div class="m" id="module.RELATION_KINDS" data-q="modulo lo que se importa de 'threejs-cad-sdk' relation_kinds los tipos de relacion que el sdk pone en orden">
+<a class="sig" href="#module.RELATION_KINDS"><code>RELATION_KINDS</code></a>
+<p class="doc">los tipos de relación que el SDK pone en orden</p>
+</div>
+<div class="m" id="module.JOINT_TYPES" data-q="modulo lo que se importa de 'threejs-cad-sdk' joint_types los tipos de junta">
+<a class="sig" href="#module.JOINT_TYPES"><code>JOINT_TYPES</code></a>
+<p class="doc">los tipos de junta</p>
+</div>
+<div class="m" id="module.WORKSHOP_MEMBERS" data-q="modulo lo que se importa de 'threejs-cad-sdk' workshop_members la tabla de lo que tiene un workshop (la que imprime taller.help())">
+<a class="sig" href="#module.WORKSHOP_MEMBERS"><code>WORKSHOP_MEMBERS</code></a>
+<p class="doc">la tabla de lo que tiene un Workshop (la que imprime taller.help())</p>
+</div>
+<div class="m" id="module.MODULE_MEMBERS" data-q="modulo lo que se importa de 'threejs-cad-sdk' module_members esta tabla">
+<a class="sig" href="#module.MODULE_MEMBERS"><code>MODULE_MEMBERS</code></a>
+<p class="doc">esta tabla</p>
+</div>
+</div>
+<div class="valores"><h3>Valores</h3><div class="m" id="module.UNITS.valor" data-q="units mm: {system: metric, mm: 1} · cm: {system: metric, mm: 10} · m: {system: metric, mm: 1000} · in: {system: imperial, mm: 25.4} · ft: {system: imperial, mm: 304.8}"><a class="sig" href="#module.UNITS.valor"><code>UNITS</code></a><p class="doc"><code>mm: {system: metric, mm: 1} · cm: {system: metric, mm: 10} · m: {system: metric, mm: 1000} · in: {system: imperial, mm: 25.4} · ft: {system: imperial, mm: 304.8}</code></p></div>
+<div class="m" id="module.TOLERANCE_PRESETS.valor" data-q="tolerance_presets metric: {unit: mm, touch: 2, penetration: 1.5, grab: 10, snap: 25, minlength: 10} · imperial: {unit: in, touch: 0.0625, penetration: 0.046875, grab: 0.375, snap: 1, minlength: 0.375}"><a class="sig" href="#module.TOLERANCE_PRESETS.valor"><code>TOLERANCE_PRESETS</code></a><p class="doc"><code>metric: {unit: mm, touch: 2, penetration: 1.5, grab: 10, snap: 25, minLength: 10} · imperial: {unit: in, touch: 0.0625, penetration: 0.046875, grab: 0.375, snap: 1, minLength: 0.375}</code></p></div>
+<div class="m" id="module.GRAB_RATIO.valor" data-q="grab_ratio 0.3"><a class="sig" href="#module.GRAB_RATIO.valor"><code>GRAB_RATIO</code></a><p class="doc"><code>0.3</code></p></div>
+<div class="m" id="module.OPERATION_KINDS.valor" data-q="operation_kinds 'cut', 'hole', 'trim'"><a class="sig" href="#module.OPERATION_KINDS.valor"><code>OPERATION_KINDS</code></a><p class="doc"><code>'cut', 'hole', 'trim'</code></p></div>
+<div class="m" id="module.SECTIONS.valor" data-q="sections 'rect-tube', 'round-tube', 'round-bar', 'angle', 'channel', 'tee'"><a class="sig" href="#module.SECTIONS.valor"><code>SECTIONS</code></a><p class="doc"><code>'rect-tube', 'round-tube', 'round-bar', 'angle', 'channel', 'tee'</code></p></div>
+<div class="m" id="module.RELATION_KINDS.valor" data-q="relation_kinds 'joint', 'fixing', 'link'"><a class="sig" href="#module.RELATION_KINDS.valor"><code>RELATION_KINDS</code></a><p class="doc"><code>'joint', 'fixing', 'link'</code></p></div>
+<div class="m" id="module.JOINT_TYPES.valor" data-q="joint_types 'revolute', 'prismatic'"><a class="sig" href="#module.JOINT_TYPES.valor"><code>JOINT_TYPES</code></a><p class="doc"><code>'revolute', 'prismatic'</code></p></div></div>
+</section>
+<section id="workshop" data-sec="workshop">
+<header><p class="grupo">Para empezar</p><h2>Workshop</h2><p class="tag">el documento: crear, buscar y guardar partes</p>
+<p class="intro">Lo que devuelve <code>createWorkshop()</code>. En los ejemplos se llama <code>taller</code>, pero el nombre de la variable es de quien lo usa.</p></header>
+<div class="lista">
+<div class="m" id="workshop.addPiece" data-q="workshop el documento: crear, buscar y guardar partes addpiece({ name?, size, material?, shape?, center?, placement?, axes? }) una pieza nueva: size en la unidad del documento sobre sus ejes locales; placement (transform) la orienta al crearla; axes fuerza cual eje es el largo, el ancho y el espesor">
+<a class="sig" href="#workshop.addPiece"><code>addPiece({ name?, size, material?, shape?, center?, placement?, axes? })</code></a>
+<p class="doc">una pieza nueva: size en la unidad del documento sobre sus ejes locales; placement (Transform) la orienta al crearla; axes fuerza cuál eje es el largo, el ancho y el espesor</p>
+</div>
+<div class="m" id="workshop.assemble" data-q="workshop el documento: crear, buscar y guardar partes assemble(parts, { name? }) un ensamble con esas partes hermanas; se anida, no se aplasta">
+<a class="sig" href="#workshop.assemble"><code>assemble(parts, { name? })</code></a>
+<p class="doc">un ensamble con esas partes hermanas; se anida, no se aplasta</p>
+</div>
+<div class="m" id="workshop.instantiate" data-q="workshop el documento: crear, buscar y guardar partes instantiate(part, { name?, parent?, placement? }) una instancia: la misma parte colocada otra vez; editar la fuente cambia todas">
+<a class="sig" href="#workshop.instantiate"><code>instantiate(part, { name?, parent?, placement? })</code></a>
+<p class="doc">una instancia: la misma parte colocada otra vez; editar la fuente cambia todas</p>
+</div>
+<div class="m" id="workshop.array" data-q="workshop el documento: crear, buscar y guardar partes array(part, spec) repetir una parte en linea, en area o alrededor de un eje: crea instancias (ver arraytransforms)">
+<a class="sig" href="#workshop.array"><code>array(part, spec)</code></a>
+<p class="doc">repetir una parte en línea, en área o alrededor de un eje: crea instancias (ver arrayTransforms)</p>
+</div>
+<div class="m" id="workshop.pick" data-q="workshop el documento: crear, buscar y guardar partes pick(ray, { exclude? }) la primera pieza que corta un rayo { origin, direction }, contra su forma real: { part, point, distance, normal }, o null">
+<a class="sig" href="#workshop.pick"><code>pick(ray, { exclude? })</code></a>
+<p class="doc">la primera pieza que corta un rayo { origin, direction }, contra su forma real: { part, point, distance, normal }, o null</p>
+</div>
+<div class="m" id="workshop.snap" data-q="workshop el documento: crear, buscar y guardar partes snap(parts, { against?, distance?, grid? }) iman: { transform, snaps } que pega sus caras a las de otras piezas cercanas (no aplica nada)">
+<a class="sig" href="#workshop.snap"><code>snap(parts, { against?, distance?, grid? })</code></a>
+<p class="doc">imán: { transform, snaps } que pega sus caras a las de otras piezas cercanas (no aplica nada)</p>
+</div>
+<div class="m" id="workshop.pushOut" data-q="workshop el documento: crear, buscar y guardar partes pushout(parts, { against?, floor?, up? }) si esta metida en otras, { transform, from } que la saca por el lado de menor penetracion">
+<a class="sig" href="#workshop.pushOut"><code>pushOut(parts, { against?, floor?, up? })</code></a>
+<p class="doc">si está metida en otras, { transform, from } que la saca por el lado de menor penetración</p>
+</div>
+<div class="m" id="workshop.drop" data-q="workshop el documento: crear, buscar y guardar partes drop(parts, { against?, floor?, up? }) apoyar: { transform, distance, on } hasta tocar lo de abajo o el piso">
+<a class="sig" href="#workshop.drop"><code>drop(parts, { against?, floor?, up? })</code></a>
+<p class="doc">apoyar: { transform, distance, on } hasta tocar lo de abajo o el piso</p>
+</div>
+<div class="m" id="workshop.alignmentGuides" data-q="workshop el documento: crear, buscar y guardar partes alignmentguides(parts, { against?, tolerance? }) los planos de otras piezas con los que quedo alineada, los mas cercanos primero">
+<a class="sig" href="#workshop.alignmentGuides"><code>alignmentGuides(parts, { against?, tolerance? })</code></a>
+<p class="doc">los planos de otras piezas con los que quedó alineada, los más cercanos primero</p>
+</div>
+<div class="m" id="workshop.addJoint" data-q="workshop el documento: crear, buscar y guardar partes addjoint({ type, moving, base, axis, limits?, meta? }) una junta: la movil gira sobre axis ('revolute') o corre a lo largo de el ('prismatic'); se abre con joint.at(value)">
+<a class="sig" href="#workshop.addJoint"><code>addJoint({ type, moving, base, axis, limits?, meta? })</code></a>
+<p class="doc">una junta: la móvil gira sobre axis ('revolute') o corre a lo largo de él ('prismatic'); se abre con joint.at(value)</p>
+</div>
+<div class="m" id="workshop.hingeCandidates" data-q="workshop el documento: crear, buscar y guardar partes hingecandidates(moving, base) los cantos donde puede ir una bisagra, en el marco de la base; cada uno va directo a addjoint">
+<a class="sig" href="#workshop.hingeCandidates"><code>hingeCandidates(moving, base)</code></a>
+<p class="doc">los cantos donde puede ir una bisagra, en el marco de la base; cada uno va directo a addJoint</p>
+</div>
+<div class="m" id="workshop.slideCandidates" data-q="workshop el documento: crear, buscar y guardar partes slidecandidates(moving, base) las direcciones en que la movil corre sin chocar con la base; cada una va directo a addjoint">
+<a class="sig" href="#workshop.slideCandidates"><code>slideCandidates(moving, base)</code></a>
+<p class="doc">las direcciones en que la móvil corre sin chocar con la base; cada una va directo a addJoint</p>
+</div>
+<div class="m" id="workshop.addFixing" data-q="workshop el documento: crear, buscar y guardar partes addfixing({ a, b, points?, count?, holes?, policy?, meta? }) una union entre dos piezas que se tocan: puntos normalizados en el parche, agujeros en las dos">
+<a class="sig" href="#workshop.addFixing"><code>addFixing({ a, b, points?, count?, holes?, policy?, meta? })</code></a>
+<p class="doc">una unión entre dos piezas que se tocan: puntos normalizados en el parche, agujeros en las dos</p>
+</div>
+<div class="m" id="workshop.addLink" data-q="workshop el documento: crear, buscar y guardar partes addlink({ base, face, moving, gap?, meta? }) un vinculo: la punta de moving anclada a una cara de base; una punta mueve, dos estiran">
+<a class="sig" href="#workshop.addLink"><code>addLink({ base, face, moving, gap?, meta? })</code></a>
+<p class="doc">un vínculo: la punta de moving anclada a una cara de base; una punta mueve, dos estiran</p>
+</div>
+<div class="m" id="workshop.validateLink" data-q="workshop el documento: crear, buscar y guardar partes validatelink({ base, face, moving }) ¿se puede crear ese vinculo? { ok } o { ok: false, reason: 'over-constrained' | 'cycle' | 'not-parallel' | …, message }">
+<a class="sig" href="#workshop.validateLink"><code>validateLink({ base, face, moving })</code></a>
+<p class="doc">¿se puede crear ese vínculo? { ok } o { ok: false, reason: 'over-constrained' | 'cycle' | 'not-parallel' | …, message }</p>
+</div>
+<div class="m" id="workshop.relation" data-q="workshop el documento: crear, buscar y guardar partes relation(id) una relacion por su id (joint, fixing, link)">
+<a class="sig" href="#workshop.relation"><code>relation(id)</code></a>
+<p class="doc">una relación por su id (Joint, Fixing, Link)</p>
+</div>
+<div class="m" id="workshop.relations" data-q="workshop el documento: crear, buscar y guardar partes relations({ kind?, part? }) las relaciones del documento, con las de adentro de las instancias">
+<a class="sig" href="#workshop.relations"><code>relations({ kind?, part? })</code></a>
+<p class="doc">las relaciones del documento, con las de adentro de las instancias</p>
+</div>
+<div class="m" id="workshop.cutList" data-q="workshop el documento: crear, buscar y guardar partes cutlist({ groupby? }) el despiece: { stock, material, length, width, thickness, count, ids, fixings } por grupo de piezas identicas">
+<a class="sig" href="#workshop.cutList"><code>cutList({ groupBy? })</code></a>
+<p class="doc">el despiece: { stock, material, length, width, thickness, count, ids, fixings } por grupo de piezas idénticas</p>
+</div>
+<div class="m" id="workshop.part" data-q="workshop el documento: crear, buscar y guardar partes part(id) una parte por su id">
+<a class="sig" href="#workshop.part"><code>part(id)</code></a>
+<p class="doc">una parte por su id</p>
+</div>
+<div class="m" id="workshop.parts" data-q="workshop el documento: crear, buscar y guardar partes parts todas las partes">
+<a class="sig" href="#workshop.parts"><code>parts</code></a>
+<p class="doc">todas las partes</p>
+</div>
+<div class="m" id="workshop.roots" data-q="workshop el documento: crear, buscar y guardar partes roots las partes de primer nivel (las que no estan en un ensamble)">
+<a class="sig" href="#workshop.roots"><code>roots</code></a>
+<p class="doc">las partes de primer nivel (las que no están en un ensamble)</p>
+</div>
+<div class="m" id="workshop.units" data-q="workshop el documento: crear, buscar y guardar partes units la unidad de todas las medidas del documento: 'mm', 'cm', 'm', 'in' o 'ft'">
+<a class="sig" href="#workshop.units"><code>units</code></a>
+<p class="doc">la unidad de todas las medidas del documento: 'mm', 'cm', 'm', 'in' o 'ft'</p>
+</div>
+<div class="m" id="workshop.tolerances" data-q="workshop el documento: crear, buscar y guardar partes tolerances las tolerancias en uso, en esa unidad: { touch, penetration } (ver config.js)">
+<a class="sig" href="#workshop.tolerances"><code>tolerances</code></a>
+<p class="doc">las tolerancias en uso, en esa unidad: { touch, penetration } (ver config.js)</p>
+</div>
+<div class="m" id="workshop.contacts" data-q="workshop el documento: crear, buscar y guardar partes contacts({ tolerance?, exact? }) todos los contactos entre piezas (contact); exact: con la forma real">
+<a class="sig" href="#workshop.contacts"><code>contacts({ tolerance?, exact? })</code></a>
+<p class="doc">todos los contactos entre piezas (Contact); exact: con la forma real</p>
+</div>
+<div class="m" id="workshop.collisions" data-q="workshop el documento: crear, buscar y guardar partes collisions({ tolerance?, exact? }) todas las piezas que se meten unas en otras (intersection)">
+<a class="sig" href="#workshop.collisions"><code>collisions({ tolerance?, exact? })</code></a>
+<p class="doc">todas las piezas que se meten unas en otras (Intersection)</p>
+</div>
+<div class="m" id="workshop.tree" data-q="workshop el documento: crear, buscar y guardar partes tree() el arbol de partes, como texto">
+<a class="sig" href="#workshop.tree"><code>tree()</code></a>
+<p class="doc">el árbol de partes, como texto</p>
+</div>
+<div class="m" id="workshop.on" data-q="workshop el documento: crear, buscar y guardar partes on(fn) enterarse de cada cambio ({ type, ids }); deshacer avisa con 'undo' y 'redo', cancelar con 'rollback', y las relaciones con 'relation', 'relation-broken' y 'relation-remove'; devuelve como desuscribirse">
+<a class="sig" href="#workshop.on"><code>on(fn)</code></a>
+<p class="doc">enterarse de cada cambio ({ type, ids }); deshacer avisa con 'undo' y 'redo', cancelar con 'rollback', y las relaciones con 'relation', 'relation-broken' y 'relation-remove'; devuelve cómo desuscribirse</p>
+</div>
+<div class="m" id="workshop.undo" data-q="workshop el documento: crear, buscar y guardar partes undo() volver al documento de antes del ultimo paso; false si no habia nada">
+<a class="sig" href="#workshop.undo"><code>undo()</code></a>
+<p class="doc">volver al documento de antes del último paso; false si no había nada</p>
+</div>
+<div class="m" id="workshop.redo" data-q="workshop el documento: crear, buscar y guardar partes redo() volver a hacer lo ultimo que se deshizo; false si no habia nada">
+<a class="sig" href="#workshop.redo"><code>redo()</code></a>
+<p class="doc">volver a hacer lo último que se deshizo; false si no había nada</p>
+</div>
+<div class="m" id="workshop.canUndo" data-q="workshop el documento: crear, buscar y guardar partes canundo ¿hay algo para deshacer?">
+<a class="sig" href="#workshop.canUndo"><code>canUndo</code></a>
+<p class="doc">¿hay algo para deshacer?</p>
+</div>
+<div class="m" id="workshop.canRedo" data-q="workshop el documento: crear, buscar y guardar partes canredo ¿hay algo para rehacer?">
+<a class="sig" href="#workshop.canRedo"><code>canRedo</code></a>
+<p class="doc">¿hay algo para rehacer?</p>
+</div>
+<div class="m" id="workshop.begin" data-q="workshop el documento: crear, buscar y guardar partes begin() abrir una transaccion: lo que se haga hasta commit() es un solo paso de deshacer (se anidan)">
+<a class="sig" href="#workshop.begin"><code>begin()</code></a>
+<p class="doc">abrir una transacción: lo que se haga hasta commit() es un solo paso de deshacer (se anidan)</p>
+</div>
+<div class="m" id="workshop.commit" data-q="workshop el documento: crear, buscar y guardar partes commit() cerrar la transaccion abierta">
+<a class="sig" href="#workshop.commit"><code>commit()</code></a>
+<p class="doc">cerrar la transacción abierta</p>
+</div>
+<div class="m" id="workshop.rollback" data-q="workshop el documento: crear, buscar y guardar partes rollback() cancelar la transaccion abierta: el documento vuelve a como estaba en begin()">
+<a class="sig" href="#workshop.rollback"><code>rollback()</code></a>
+<p class="doc">cancelar la transacción abierta: el documento vuelve a como estaba en begin()</p>
+</div>
+<div class="m" id="workshop.transaction" data-q="workshop el documento: crear, buscar y guardar partes transaction(fn) hacer fn como un solo paso de deshacer; si tira, todo vuelve a como estaba">
+<a class="sig" href="#workshop.transaction"><code>transaction(fn)</code></a>
+<p class="doc">hacer fn como un solo paso de deshacer; si tira, todo vuelve a como estaba</p>
+</div>
+<div class="m" id="workshop.clearHistory" data-q="workshop el documento: crear, buscar y guardar partes clearhistory() olvidar lo que se puede deshacer y rehacer">
+<a class="sig" href="#workshop.clearHistory"><code>clearHistory()</code></a>
+<p class="doc">olvidar lo que se puede deshacer y rehacer</p>
+</div>
+<div class="m" id="workshop.toJSON" data-q="workshop el documento: crear, buscar y guardar partes tojson() todo el documento, para guardar">
+<a class="sig" href="#workshop.toJSON"><code>toJSON()</code></a>
+<p class="doc">todo el documento, para guardar</p>
+</div>
+<div class="m" id="workshop.load" data-q="workshop el documento: crear, buscar y guardar partes load(data) cargar un documento guardado (borra el historial)">
+<a class="sig" href="#workshop.load"><code>load(data)</code></a>
+<p class="doc">cargar un documento guardado (borra el historial)</p>
+</div>
+<div class="m" id="workshop.clear" data-q="workshop el documento: crear, buscar y guardar partes clear() vaciar el documento (borra el historial; conserva la unidad)">
+<a class="sig" href="#workshop.clear"><code>clear()</code></a>
+<p class="doc">vaciar el documento (borra el historial; conserva la unidad)</p>
+</div>
+<div class="m" id="workshop.model" data-q="workshop el documento: crear, buscar y guardar partes model el modelo por dentro (para el visor y las pruebas)">
+<a class="sig" href="#workshop.model"><code>model</code></a>
+<p class="doc">el modelo por dentro (para el visor y las pruebas)</p>
+</div>
+<div class="m" id="workshop.Point3d" data-q="workshop el documento: crear, buscar y guardar partes point3d  vector3d  line  boundingbox  face  transform  contact  intersection  mesh las clases de valores, a mano">
+<a class="sig" href="#workshop.Point3d"><code>Point3d  Vector3d  Line  BoundingBox  Face  Transform  Contact  Intersection  Mesh</code></a>
+<p class="doc">las clases de valores, a mano</p>
+</div>
+<div class="m" id="workshop.help" data-q="workshop el documento: crear, buscar y guardar partes help() esta tabla">
+<a class="sig" href="#workshop.help"><code>help()</code></a>
+<p class="doc">esta tabla</p>
+</div>
+</div>
+
+</section>
+<section id="part" data-sec="part">
+<header><p class="grupo">Partes</p><h2>Part</h2><p class="tag">lo que tiene toda parte: Piece y Assembly</p>
+<p class="intro">Identidad, colocación, geometría consultable y los verbos. La geometría se lee en el mundo, o en el marco de la parte con <code>local</code>.</p></header>
+<div class="lista">
+<div class="m" id="part.id" data-q="part lo que tiene toda parte: piece y assembly id su identificador (p-1, e-1…)">
+<a class="sig" href="#part.id"><code>id</code></a>
+<p class="doc">su identificador (P-1, E-1…)</p>
+</div>
+<div class="m" id="part.kind" data-q="part lo que tiene toda parte: piece y assembly kind 'piece' o 'assembly'">
+<a class="sig" href="#part.kind"><code>kind</code></a>
+<p class="doc">'piece' o 'assembly'</p>
+</div>
+<div class="m" id="part.name" data-q="part lo que tiene toda parte: piece y assembly name su nombre">
+<a class="sig" href="#part.name"><code>name</code></a>
+<p class="doc">su nombre</p>
+</div>
+<div class="m" id="part.parent" data-q="part lo que tiene toda parte: piece y assembly parent el ensamble que la contiene, o null">
+<a class="sig" href="#part.parent"><code>parent</code></a>
+<p class="doc">el ensamble que la contiene, o null</p>
+</div>
+<div class="m" id="part.source" data-q="part lo que tiene toda parte: piece y assembly source de quien es copia, si es una instancia (o de adentro de una); si no, null">
+<a class="sig" href="#part.source"><code>source</code></a>
+<p class="doc">de quién es copia, si es una instancia (o de adentro de una); si no, null</p>
+</div>
+<div class="m" id="part.instances" data-q="part lo que tiene toda parte: piece y assembly instances las instancias que se colocaron de ella">
+<a class="sig" href="#part.instances"><code>instances</code></a>
+<p class="doc">las instancias que se colocaron de ella</p>
+</div>
+<div class="m" id="part.placement" data-q="part lo que tiene toda parte: piece y assembly placement su colocacion en el mundo (transform)">
+<a class="sig" href="#part.placement"><code>placement</code></a>
+<p class="doc">su colocación en el mundo (Transform)</p>
+</div>
+<div class="m" id="part.axes" data-q="part lo que tiene toda parte: piece y assembly axes sus ejes locales x, y, z vistos desde el mundo (vector3d)">
+<a class="sig" href="#part.axes"><code>axes</code></a>
+<p class="doc">sus ejes locales x, y, z vistos desde el mundo (Vector3d)</p>
+</div>
+<div class="m" id="part.vertices" data-q="part lo que tiene toda parte: piece y assembly vertices sus vertices en el mundo (point3d), los de su forma real. vertices[0].x se lee, no se escribe">
+<a class="sig" href="#part.vertices"><code>vertices</code></a>
+<p class="doc">sus vértices en el mundo (Point3d), los de su forma real. vertices[0].x se lee, no se escribe</p>
+</div>
+<div class="m" id="part.edges" data-q="part lo que tiene toda parte: piece y assembly edges sus aristas rectas en el mundo (line); las de una superficie curva no se ofrecen">
+<a class="sig" href="#part.edges"><code>edges</code></a>
+<p class="doc">sus aristas rectas en el mundo (Line); las de una superficie curva no se ofrecen</p>
+</div>
+<div class="m" id="part.faces" data-q="part lo que tiene toda parte: piece y assembly faces sus caras planas en el mundo (face), con sus agujeros">
+<a class="sig" href="#part.faces"><code>faces</code></a>
+<p class="doc">sus caras planas en el mundo (Face), con sus agujeros</p>
+</div>
+<div class="m" id="part.boundingBox" data-q="part lo que tiene toda parte: piece y assembly boundingbox la caja que la encierra, alineada al mundo">
+<a class="sig" href="#part.boundingBox"><code>boundingBox</code></a>
+<p class="doc">la caja que la encierra, alineada al mundo</p>
+</div>
+<div class="m" id="part.local" data-q="part lo que tiene toda parte: piece y assembly local lo mismo en su propio marco: local.vertices, local.edges, local.faces, local.boundingbox (y local.solid, en una pieza)">
+<a class="sig" href="#part.local"><code>local</code></a>
+<p class="doc">lo mismo en su propio marco: local.vertices, local.edges, local.faces, local.boundingBox (y local.solid, en una pieza)</p>
+</div>
+<div class="m" id="part.transform" data-q="part lo que tiene toda parte: piece y assembly transform(t) aplicarle un transform: el verbo del que salen los demas">
+<a class="sig" href="#part.transform"><code>transform(t)</code></a>
+<p class="doc">aplicarle un Transform: el verbo del que salen los demás</p>
+</div>
+<div class="m" id="part.move" data-q="part lo que tiene toda parte: piece y assembly move(v) / move(from, to) trasladar por un vector, o de un punto a otro">
+<a class="sig" href="#part.move"><code>move(v) / move(from, to)</code></a>
+<p class="doc">trasladar por un vector, o de un punto a otro</p>
+</div>
+<div class="m" id="part.rotate" data-q="part lo que tiene toda parte: piece y assembly rotate(degrees, axis?, center?) girar en grados; eje 'x' | 'y' | 'z' o un vector; por el centro de su caja">
+<a class="sig" href="#part.rotate"><code>rotate(degrees, axis?, center?)</code></a>
+<p class="doc">girar en grados; eje 'x' | 'y' | 'z' o un vector; por el centro de su caja</p>
+</div>
+<div class="m" id="part.duplicate" data-q="part lo que tiene toda parte: piece y assembly duplicate() copia exacta en el mismo lugar, con todo lo de adentro (independiente: no sigue a la original)">
+<a class="sig" href="#part.duplicate"><code>duplicate()</code></a>
+<p class="doc">copia exacta en el mismo lugar, con todo lo de adentro (independiente: no sigue a la original)</p>
+</div>
+<div class="m" id="part.detach" data-q="part lo que tiene toda parte: piece y assembly detach() soltar una instancia: pasa a ser una parte de verdad, que ya no sigue a su fuente">
+<a class="sig" href="#part.detach"><code>detach()</code></a>
+<p class="doc">soltar una instancia: pasa a ser una parte de verdad, que ya no sigue a su fuente</p>
+</div>
+<div class="m" id="part.rename" data-q="part lo que tiene toda parte: piece y assembly rename(name) cambiarle el nombre">
+<a class="sig" href="#part.rename"><code>rename(name)</code></a>
+<p class="doc">cambiarle el nombre</p>
+</div>
+<div class="m" id="part.remove" data-q="part lo que tiene toda parte: piece y assembly remove() borrarla, con todo lo que cuelga de ella">
+<a class="sig" href="#part.remove"><code>remove()</code></a>
+<p class="doc">borrarla, con todo lo que cuelga de ella</p>
+</div>
+<div class="m" id="part.touches" data-q="part lo que tiene toda parte: piece y assembly touches(other, { tolerance?, exact? }) ¿se toca con la otra sin meterse? (a tolerances.touch o menos). exact: con la forma real, no la caja">
+<a class="sig" href="#part.touches"><code>touches(other, { tolerance?, exact? })</code></a>
+<p class="doc">¿se toca con la otra sin meterse? (a tolerances.touch o menos). exact: con la forma real, no la caja</p>
+</div>
+<div class="m" id="part.intersects" data-q="part lo que tiene toda parte: piece y assembly intersects(other, { tolerance?, exact? }) ¿se mete en la otra? (mas de tolerances.penetration)">
+<a class="sig" href="#part.intersects"><code>intersects(other, { tolerance?, exact? })</code></a>
+<p class="doc">¿se mete en la otra? (más de tolerances.penetration)</p>
+</div>
+<div class="m" id="part.contactsWith" data-q="part lo que tiene toda parte: piece y assembly contactswith(other, { tolerance?, exact? }) donde se toca con la otra (contact). con ella misma: sus uniones internas">
+<a class="sig" href="#part.contactsWith"><code>contactsWith(other, { tolerance?, exact? })</code></a>
+<p class="doc">dónde se toca con la otra (Contact). Con ella misma: sus uniones internas</p>
+</div>
+<div class="m" id="part.intersectionsWith" data-q="part lo que tiene toda parte: piece y assembly intersectionswith(other, { tolerance?, exact? }) lo que comparte de volumen con la otra (intersection)">
+<a class="sig" href="#part.intersectionsWith"><code>intersectionsWith(other, { tolerance?, exact? })</code></a>
+<p class="doc">lo que comparte de volumen con la otra (Intersection)</p>
+</div>
+<div class="m" id="part.closest" data-q="part lo que tiene toda parte: piece y assembly closest(point, { tolerance?, space? }) el vertice, la arista o la cara mas cercana: { kind, piece, point, edge, face, key }, o null">
+<a class="sig" href="#part.closest"><code>closest(point, { tolerance?, space? })</code></a>
+<p class="doc">el vértice, la arista o la cara más cercana: { kind, piece, point, edge, face, key }, o null</p>
+</div>
+<div class="m" id="part.toString" data-q="part lo que tiene toda parte: piece y assembly tostring() para leer">
+<a class="sig" href="#part.toString"><code>toString()</code></a>
+<p class="doc">para leer</p>
+</div>
+<div class="m" id="part.help" data-q="part lo que tiene toda parte: piece y assembly help() esta tabla">
+<a class="sig" href="#part.help"><code>help()</code></a>
+<p class="doc">esta tabla</p>
+</div>
+</div>
+
+</section>
+<section id="piece" data-sec="piece">
+<header><p class="grupo">Partes</p><h2>Piece</h2><p class="tag">una pieza: lo que se corta</p>
+<p class="hereda">Además, todo lo de <a href="#part">Part</a>.</p></header>
+<div class="lista">
+<div class="m" id="piece.size" data-q="piece una pieza: lo que se corta size sus medidas en su marco local: { x, y, z }">
+<a class="sig" href="#piece.size"><code>size</code></a>
+<p class="doc">sus medidas en su marco local: { x, y, z }</p>
+</div>
+<div class="m" id="piece.dims" data-q="piece una pieza: lo que se corta dims { length, width, thickness }: largo, ancho y espesor — gire como gire">
+<a class="sig" href="#piece.dims"><code>dims</code></a>
+<p class="doc">{ length, width, thickness }: largo, ancho y espesor — gire como gire</p>
+</div>
+<div class="m" id="piece.directions" data-q="piece una pieza: lo que se corta directions hacia donde corren su largo, ancho y espesor en el mundo (vector3d)">
+<a class="sig" href="#piece.directions"><code>directions</code></a>
+<p class="doc">hacia dónde corren su largo, ancho y espesor en el mundo (Vector3d)</p>
+</div>
+<div class="m" id="piece.material" data-q="piece una pieza: lo que se corta material su material">
+<a class="sig" href="#piece.material"><code>material</code></a>
+<p class="doc">su material</p>
+</div>
+<div class="m" id="piece.shape" data-q="piece una pieza: lo que se corta shape la forma de su bruto: { kind: 'profile', axis, section, params? }, { kind: 'lathe', axis, contour } o null (una caja)">
+<a class="sig" href="#piece.shape"><code>shape</code></a>
+<p class="doc">la forma de su bruto: { kind: 'profile', axis, section, params? }, { kind: 'lathe', axis, contour } o null (una caja)</p>
+</div>
+<div class="m" id="piece.stock" data-q="piece una pieza: lo que se corta stock su bruto, lo que se compra: { size, shape }; las operaciones no lo cambian">
+<a class="sig" href="#piece.stock"><code>stock</code></a>
+<p class="doc">su bruto, lo que se compra: { size, shape }; las operaciones no lo cambian</p>
+</div>
+<div class="m" id="piece.operations" data-q="piece una pieza: lo que se corta operations lo que se le hace al bruto, en orden: { id, kind: 'cut' | 'hole', … }">
+<a class="sig" href="#piece.operations"><code>operations</code></a>
+<p class="doc">lo que se le hace al bruto, en orden: { id, kind: 'cut' | 'hole', … }</p>
+</div>
+<div class="m" id="piece.solid" data-q="piece una pieza: lo que se corta solid la forma que resulta (mesh), en el mundo: se calcula, no se guarda">
+<a class="sig" href="#piece.solid"><code>solid</code></a>
+<p class="doc">la forma que resulta (Mesh), en el mundo: se calcula, no se guarda</p>
+</div>
+<div class="m" id="piece.resize" data-q="piece una pieza: lo que se corta resize(size) cambiar sus medidas en su marco local; las operaciones se reaplican">
+<a class="sig" href="#piece.resize"><code>resize(size)</code></a>
+<p class="doc">cambiar sus medidas en su marco local; las operaciones se reaplican</p>
+</div>
+<div class="m" id="piece.setMaterial" data-q="piece una pieza: lo que se corta setmaterial(m) cambiarle el material">
+<a class="sig" href="#piece.setMaterial"><code>setMaterial(m)</code></a>
+<p class="doc">cambiarle el material</p>
+</div>
+<div class="m" id="piece.setShape" data-q="piece una pieza: lo que se corta setshape(shape) cambiarle la forma del bruto (perfil, torneado; null: una caja)">
+<a class="sig" href="#piece.setShape"><code>setShape(shape)</code></a>
+<p class="doc">cambiarle la forma del bruto (perfil, torneado; null: una caja)</p>
+</div>
+<div class="m" id="piece.addOperation" data-q="piece una pieza: lo que se corta addoperation(op) agregar una operacion: { kind: 'cut', axis, outline } o { kind: 'hole', axis, side, at, diameter, depth? }">
+<a class="sig" href="#piece.addOperation"><code>addOperation(op)</code></a>
+<p class="doc">agregar una operación: { kind: 'cut', axis, outline } o { kind: 'hole', axis, side, at, diameter, depth? }</p>
+</div>
+<div class="m" id="piece.updateOperation" data-q="piece una pieza: lo que se corta updateoperation(id, op) reemplazar una operacion, en su lugar">
+<a class="sig" href="#piece.updateOperation"><code>updateOperation(id, op)</code></a>
+<p class="doc">reemplazar una operación, en su lugar</p>
+</div>
+<div class="m" id="piece.removeOperation" data-q="piece una pieza: lo que se corta removeoperation(id) sacar una operacion: la forma vuelve a la de antes">
+<a class="sig" href="#piece.removeOperation"><code>removeOperation(id)</code></a>
+<p class="doc">sacar una operación: la forma vuelve a la de antes</p>
+</div>
+<div class="m" id="piece.thicknessAt" data-q="piece una pieza: lo que se corta thicknessat(point, direction) cuanto material atraviesa la recta por point en esa direccion (la pared, si es un cano), o null">
+<a class="sig" href="#piece.thicknessAt"><code>thicknessAt(point, direction)</code></a>
+<p class="doc">cuánto material atraviesa la recta por point en esa dirección (la pared, si es un caño), o null</p>
+</div>
+<div class="m" id="piece.help.static" data-q="piece una pieza: lo que se corta static help() esta tabla, sin crear una pieza">
+<a class="sig" href="#piece.help.static"><code>static help()</code></a>
+<p class="doc">esta tabla, sin crear una pieza</p>
+</div>
+</div>
+
+</section>
+<section id="assembly" data-sec="assembly">
+<header><p class="grupo">Partes</p><h2>Assembly</h2><p class="tag">un conjunto de partes con colocación propia</p>
+<p class="hereda">Además, todo lo de <a href="#part">Part</a>.</p></header>
+<div class="lista">
+<div class="m" id="assembly.children" data-q="assembly un conjunto de partes con colocacion propia children las partes de adentro, primer nivel">
+<a class="sig" href="#assembly.children"><code>children</code></a>
+<p class="doc">las partes de adentro, primer nivel</p>
+</div>
+<div class="m" id="assembly.pieces" data-q="assembly un conjunto de partes con colocacion propia pieces todas las piezas de adentro, a cualquier profundidad">
+<a class="sig" href="#assembly.pieces"><code>pieces</code></a>
+<p class="doc">todas las piezas de adentro, a cualquier profundidad</p>
+</div>
+<div class="m" id="assembly.explode" data-q="assembly un conjunto de partes con colocacion propia explode() deshacerlo: sus partes quedan en el mismo lugar">
+<a class="sig" href="#assembly.explode"><code>explode()</code></a>
+<p class="doc">deshacerlo: sus partes quedan en el mismo lugar</p>
+</div>
+<div class="m" id="assembly.stretchPlanes" data-q="assembly un conjunto de partes con colocacion propia stretchplanes(axis, { locked? }) donde se puede cortar para estirar sobre un eje del ensamble: { plane, gap }, el hueco mas ancho primero">
+<a class="sig" href="#assembly.stretchPlanes"><code>stretchPlanes(axis, { locked? })</code></a>
+<p class="doc">dónde se puede cortar para estirar sobre un eje del ensamble: { plane, gap }, el hueco más ancho primero</p>
+</div>
+<div class="m" id="assembly.stretchPlan" data-q="assembly un conjunto de partes con colocacion propia stretchplan({ axis, plane?, side?, delta?, locked?, minlength? }) lo que haria estirar, sin hacerlo: que se estira, se mueve o se queda, y el limite">
+<a class="sig" href="#assembly.stretchPlan"><code>stretchPlan({ axis, plane?, side?, delta?, locked?, minLength? })</code></a>
+<p class="doc">lo que haría estirar, sin hacerlo: qué se estira, se mueve o se queda, y el límite</p>
+</div>
+<div class="m" id="assembly.stretch" data-q="assembly un conjunto de partes con colocacion propia stretch({ axis, plane?, side?, delta?, locked?, minlength? }) estirar (o achicar) por un plano, en un solo paso de deshacer">
+<a class="sig" href="#assembly.stretch"><code>stretch({ axis, plane?, side?, delta?, locked?, minLength? })</code></a>
+<p class="doc">estirar (o achicar) por un plano, en un solo paso de deshacer</p>
+</div>
+<div class="m" id="assembly.help.static" data-q="assembly un conjunto de partes con colocacion propia static help() esta tabla, sin crear un ensamble">
+<a class="sig" href="#assembly.help.static"><code>static help()</code></a>
+<p class="doc">esta tabla, sin crear un ensamble</p>
+</div>
+</div>
+
+</section>
+<section id="relation" data-sec="relation">
+<header><p class="grupo">Relaciones</p><h2>Relation</h2><p class="tag">una relación entre partes</p>
+<p class="intro">Viven en el documento entre partes guardadas: entran en el deshacer, se guardan y se limpian solas si se borra una de sus partes.</p></header>
+<div class="lista">
+<div class="m" id="relation.id" data-q="relation una relacion entre partes id su identificador (r-1…; i-1/r-2 si es de adentro de una instancia)">
+<a class="sig" href="#relation.id"><code>id</code></a>
+<p class="doc">su identificador (R-1…; I-1/R-2 si es de adentro de una instancia)</p>
+</div>
+<div class="m" id="relation.record" data-q="relation una relacion entre partes record lo guardado, tal cual: { id, kind, parts, data, ops, broken, meta }">
+<a class="sig" href="#relation.record"><code>record</code></a>
+<p class="doc">lo guardado, tal cual: { id, kind, parts, data, ops, broken, meta }</p>
+</div>
+<div class="m" id="relation.kind" data-q="relation una relacion entre partes kind 'joint', 'fixing' o 'link'">
+<a class="sig" href="#relation.kind"><code>kind</code></a>
+<p class="doc">'joint', 'fixing' o 'link'</p>
+</div>
+<div class="m" id="relation.parts" data-q="relation una relacion entre partes parts las partes que relaciona">
+<a class="sig" href="#relation.parts"><code>parts</code></a>
+<p class="doc">las partes que relaciona</p>
+</div>
+<div class="m" id="relation.broken" data-q="relation una relacion entre partes broken null si vale; si no, por que">
+<a class="sig" href="#relation.broken"><code>broken</code></a>
+<p class="doc">null si vale; si no, por qué</p>
+</div>
+<div class="m" id="relation.meta" data-q="relation una relacion entre partes meta lo que la app guardo con ella (el sdk no lo lee)">
+<a class="sig" href="#relation.meta"><code>meta</code></a>
+<p class="doc">lo que la app guardó con ella (el SDK no lo lee)</p>
+</div>
+<div class="m" id="relation.isVirtual" data-q="relation una relacion entre partes isvirtual ¿es de adentro de una instancia? (se lee; se cambia en la fuente)">
+<a class="sig" href="#relation.isVirtual"><code>isVirtual</code></a>
+<p class="doc">¿es de adentro de una instancia? (se lee; se cambia en la fuente)</p>
+</div>
+<div class="m" id="relation.setMeta" data-q="relation una relacion entre partes setmeta(meta) cambiar lo que la app guarda con ella">
+<a class="sig" href="#relation.setMeta"><code>setMeta(meta)</code></a>
+<p class="doc">cambiar lo que la app guarda con ella</p>
+</div>
+<div class="m" id="relation.remove" data-q="relation una relacion entre partes remove() borrarla, con las operaciones que son de ella">
+<a class="sig" href="#relation.remove"><code>remove()</code></a>
+<p class="doc">borrarla, con las operaciones que son de ella</p>
+</div>
+<div class="m" id="relation.toString" data-q="relation una relacion entre partes tostring() para leer">
+<a class="sig" href="#relation.toString"><code>toString()</code></a>
+<p class="doc">para leer</p>
+</div>
+<div class="m" id="relation.help" data-q="relation una relacion entre partes help() esta tabla">
+<a class="sig" href="#relation.help"><code>help()</code></a>
+<p class="doc">esta tabla</p>
+</div>
+<div class="m" id="relation.help.static" data-q="relation una relacion entre partes static help() esta tabla, sin crear una relacion">
+<a class="sig" href="#relation.help.static"><code>static help()</code></a>
+<p class="doc">esta tabla, sin crear una relación</p>
+</div>
+</div>
+
+</section>
+<section id="joint" data-sec="joint">
+<header><p class="grupo">Relaciones</p><h2>Joint</h2><p class="tag">una junta: bisagra (revolute) o corredera (prismatic)</p>
+<p class="hereda">Además, todo lo de <a href="#relation">Relation</a>.</p></header>
+<div class="lista">
+<div class="m" id="joint.type" data-q="joint una junta: bisagra (revolute) o corredera (prismatic) type 'revolute' (gira) o 'prismatic' (corre)">
+<a class="sig" href="#joint.type"><code>type</code></a>
+<p class="doc">'revolute' (gira) o 'prismatic' (corre)</p>
+</div>
+<div class="m" id="joint.moving" data-q="joint una junta: bisagra (revolute) o corredera (prismatic) moving la parte que se mueve">
+<a class="sig" href="#joint.moving"><code>moving</code></a>
+<p class="doc">la parte que se mueve</p>
+</div>
+<div class="m" id="joint.base" data-q="joint una junta: bisagra (revolute) o corredera (prismatic) base la parte respecto de la cual se mueve (el eje vive en su marco)">
+<a class="sig" href="#joint.base"><code>base</code></a>
+<p class="doc">la parte respecto de la cual se mueve (el eje vive en su marco)</p>
+</div>
+<div class="m" id="joint.axis" data-q="joint una junta: bisagra (revolute) o corredera (prismatic) axis el eje en el mundo (line de largo 1 en su direccion)">
+<a class="sig" href="#joint.axis"><code>axis</code></a>
+<p class="doc">el eje en el mundo (Line de largo 1 en su dirección)</p>
+</div>
+<div class="m" id="joint.limits" data-q="joint una junta: bisagra (revolute) o corredera (prismatic) limits { min, max } en grados o unidades del documento, o null">
+<a class="sig" href="#joint.limits"><code>limits</code></a>
+<p class="doc">{ min, max } en grados o unidades del documento, o null</p>
+</div>
+<div class="m" id="joint.setLimits" data-q="joint una junta: bisagra (revolute) o corredera (prismatic) setlimits(limits) cambiarle los limites ({ min, max }, [min, max] o null)">
+<a class="sig" href="#joint.setLimits"><code>setLimits(limits)</code></a>
+<p class="doc">cambiarle los límites ({ min, max }, [min, max] o null)</p>
+</div>
+<div class="m" id="joint.at" data-q="joint una junta: bisagra (revolute) o corredera (prismatic) at(value) abierta en value, sin cambiar nada: { value, limited, transform, placement, placements: { [id de pieza]: transform } }">
+<a class="sig" href="#joint.at"><code>at(value)</code></a>
+<p class="doc">abierta en value, sin cambiar nada: { value, limited, transform, placement, placements: { [id de pieza]: Transform } }</p>
+</div>
+</div>
+
+</section>
+<section id="fixing" data-sec="fixing">
+<header><p class="grupo">Relaciones</p><h2>Fixing</h2><p class="tag">una unión entre dos piezas que se tocan</p>
+<p class="hereda">Además, todo lo de <a href="#relation">Relation</a>.</p></header>
+<div class="lista">
+<div class="m" id="fixing.a" data-q="fixing una union entre dos piezas que se tocan a la pieza por donde entra (la cabeza queda en su cara de afuera)">
+<a class="sig" href="#fixing.a"><code>a</code></a>
+<p class="doc">la pieza por donde entra (la cabeza queda en su cara de afuera)</p>
+</div>
+<div class="m" id="fixing.b" data-q="fixing una union entre dos piezas que se tocan b la pieza donde agarra">
+<a class="sig" href="#fixing.b"><code>b</code></a>
+<p class="doc">la pieza donde agarra</p>
+</div>
+<div class="m" id="fixing.policy" data-q="fixing una union entre dos piezas que se tocan policy 'break' (si se separan queda rota) o 'remove' (se borra)">
+<a class="sig" href="#fixing.policy"><code>policy</code></a>
+<p class="doc">'break' (si se separan queda rota) o 'remove' (se borra)</p>
+</div>
+<div class="m" id="fixing.count" data-q="fixing una union entre dos piezas que se tocan count cuantos puntos reparte sola, o null si van puestos a mano">
+<a class="sig" href="#fixing.count"><code>count</code></a>
+<p class="doc">cuántos puntos reparte sola, o null si van puestos a mano</p>
+</div>
+<div class="m" id="fixing.holes" data-q="fixing una union entre dos piezas que se tocan holes los agujeros en cada pieza: { a: { diameter, depth? } | null, b: … }">
+<a class="sig" href="#fixing.holes"><code>holes</code></a>
+<p class="doc">los agujeros en cada pieza: { a: { diameter, depth? } | null, b: … }</p>
+</div>
+<div class="m" id="fixing.placement" data-q="fixing una union entre dos piezas que se tocan placement donde esta ahora: { patch, facea, faceb, direction, points }, o null si no se tocan">
+<a class="sig" href="#fixing.placement"><code>placement</code></a>
+<p class="doc">dónde está ahora: { patch, faceA, faceB, direction, points }, o null si no se tocan</p>
+</div>
+<div class="m" id="fixing.direction" data-q="fixing una union entre dos piezas que se tocan direction hacia donde entra, de a hacia b (vector3d), o null">
+<a class="sig" href="#fixing.direction"><code>direction</code></a>
+<p class="doc">hacia dónde entra, de a hacia b (Vector3d), o null</p>
+</div>
+<div class="m" id="fixing.points" data-q="fixing una union entre dos piezas que se tocan points sus puntos: { uv, point, thickness: { a, b } }">
+<a class="sig" href="#fixing.points"><code>points</code></a>
+<p class="doc">sus puntos: { uv, point, thickness: { a, b } }</p>
+</div>
+<div class="m" id="fixing.update" data-q="fixing una union entre dos piezas que se tocan update({ points?, count?, holes?, policy? }) cambiar sus puntos, su reparto, sus agujeros o su politica">
+<a class="sig" href="#fixing.update"><code>update({ points?, count?, holes?, policy? })</code></a>
+<p class="doc">cambiar sus puntos, su reparto, sus agujeros o su política</p>
+</div>
+</div>
+
+</section>
+<section id="link" data-sec="link">
+<header><p class="grupo">Relaciones</p><h2>Link</h2><p class="tag">la punta de una pieza anclada a la cara de otra</p>
+<p class="hereda">Además, todo lo de <a href="#relation">Relation</a>.</p></header>
+<div class="lista">
+<div class="m" id="link.base" data-q="link la punta de una pieza anclada a la cara de otra base la pieza de la cara (la que manda)">
+<a class="sig" href="#link.base"><code>base</code></a>
+<p class="doc">la pieza de la cara (la que manda)</p>
+</div>
+<div class="m" id="link.moving" data-q="link la punta de una pieza anclada a la cara de otra moving la pieza anclada (la que sigue)">
+<a class="sig" href="#link.moving"><code>moving</code></a>
+<p class="doc">la pieza anclada (la que sigue)</p>
+</div>
+<div class="m" id="link.face" data-q="link la punta de una pieza anclada a la cara de otra face la cara de la base: { localaxis, localside }">
+<a class="sig" href="#link.face"><code>face</code></a>
+<p class="doc">la cara de la base: { localAxis, localSide }</p>
+</div>
+<div class="m" id="link.end" data-q="link la punta de una pieza anclada a la cara de otra end la punta anclada de la movil: { localaxis, localside }">
+<a class="sig" href="#link.end"><code>end</code></a>
+<p class="doc">la punta anclada de la móvil: { localAxis, localSide }</p>
+</div>
+<div class="m" id="link.gap" data-q="link la punta de una pieza anclada a la cara de otra gap la separacion, hacia afuera de la base (0: al ras; negativo: se mete)">
+<a class="sig" href="#link.gap"><code>gap</code></a>
+<p class="doc">la separación, hacia afuera de la base (0: al ras; negativo: se mete)</p>
+</div>
+<div class="m" id="link.setGap" data-q="link la punta de una pieza anclada a la cara de otra setgap(gap) cambiar la separacion">
+<a class="sig" href="#link.setGap"><code>setGap(gap)</code></a>
+<p class="doc">cambiar la separación</p>
+</div>
+</div>
+
+</section>
+<section id="point3d" data-sec="point3d">
+<header><p class="grupo">Valores</p><h2>Point3d</h2><p class="tag">un punto en el espacio</p>
+</header>
+<div class="lista">
+<div class="m" id="point3d.new Point3d(x, y, z)" data-q="point3d un punto en el espacio new point3d(x, y, z) un punto nuevo">
+<a class="sig" href="#point3d.new Point3d(x, y, z)"><code>new Point3d(x, y, z)</code></a>
+<p class="doc">un punto nuevo</p>
+</div>
+<div class="m" id="point3d.x" data-q="point3d un punto en el espacio x  y  z sus coordenadas (solo lectura)">
+<a class="sig" href="#point3d.x"><code>x  y  z</code></a>
+<p class="doc">sus coordenadas (solo lectura)</p>
+</div>
+<div class="m" id="point3d.from.static" data-q="point3d un punto en el espacio static from(v) un point3d a partir de [x, y, z] o de un objeto con x, y, z">
+<a class="sig" href="#point3d.from.static"><code>static from(v)</code></a>
+<p class="doc">un Point3d a partir de [x, y, z] o de un objeto con x, y, z</p>
+</div>
+<div class="m" id="point3d.origin.static" data-q="point3d un punto en el espacio static origin el (0, 0, 0)">
+<a class="sig" href="#point3d.origin.static"><code>static origin</code></a>
+<p class="doc">el (0, 0, 0)</p>
+</div>
+<div class="m" id="point3d.distanceTo" data-q="point3d un punto en el espacio distanceto(p) la distancia a otro punto">
+<a class="sig" href="#point3d.distanceTo"><code>distanceTo(p)</code></a>
+<p class="doc">la distancia a otro punto</p>
+</div>
+<div class="m" id="point3d.add" data-q="point3d un punto en el espacio add(v) el punto corrido por un vector">
+<a class="sig" href="#point3d.add"><code>add(v)</code></a>
+<p class="doc">el punto corrido por un vector</p>
+</div>
+<div class="m" id="point3d.subtract" data-q="point3d un punto en el espacio subtract(p) el vector3d que va de p a este punto">
+<a class="sig" href="#point3d.subtract"><code>subtract(p)</code></a>
+<p class="doc">el Vector3d que va de p a este punto</p>
+</div>
+<div class="m" id="point3d.transform" data-q="point3d un punto en el espacio transform(t) el punto transformado (devuelve uno nuevo)">
+<a class="sig" href="#point3d.transform"><code>transform(t)</code></a>
+<p class="doc">el punto transformado (devuelve uno nuevo)</p>
+</div>
+<div class="m" id="point3d.equals" data-q="point3d un punto en el espacio equals(p, tol?) ¿es el mismo punto, con tolerancia?">
+<a class="sig" href="#point3d.equals"><code>equals(p, tol?)</code></a>
+<p class="doc">¿es el mismo punto, con tolerancia?</p>
+</div>
+<div class="m" id="point3d.toArray" data-q="point3d un punto en el espacio toarray() [x, y, z]">
+<a class="sig" href="#point3d.toArray"><code>toArray()</code></a>
+<p class="doc">[x, y, z]</p>
+</div>
+<div class="m" id="point3d.toString" data-q="point3d un punto en el espacio tostring() para leer: (x, y, z)">
+<a class="sig" href="#point3d.toString"><code>toString()</code></a>
+<p class="doc">para leer: (x, y, z)</p>
+</div>
+<div class="m" id="point3d.help" data-q="point3d un punto en el espacio help() esta tabla">
+<a class="sig" href="#point3d.help"><code>help()</code></a>
+<p class="doc">esta tabla</p>
+</div>
+<div class="m" id="point3d.help.static" data-q="point3d un punto en el espacio static help() esta tabla, sin crear una instancia">
+<a class="sig" href="#point3d.help.static"><code>static help()</code></a>
+<p class="doc">esta tabla, sin crear una instancia</p>
+</div>
+</div>
+
+</section>
+<section id="vector3d" data-sec="vector3d">
+<header><p class="grupo">Valores</p><h2>Vector3d</h2><p class="tag">una dirección con largo</p>
+</header>
+<div class="lista">
+<div class="m" id="vector3d.new Vector3d(x, y, z)" data-q="vector3d una direccion con largo new vector3d(x, y, z) un vector nuevo">
+<a class="sig" href="#vector3d.new Vector3d(x, y, z)"><code>new Vector3d(x, y, z)</code></a>
+<p class="doc">un vector nuevo</p>
+</div>
+<div class="m" id="vector3d.x" data-q="vector3d una direccion con largo x  y  z sus componentes (solo lectura)">
+<a class="sig" href="#vector3d.x"><code>x  y  z</code></a>
+<p class="doc">sus componentes (solo lectura)</p>
+</div>
+<div class="m" id="vector3d.from.static" data-q="vector3d una direccion con largo static from(v) un vector3d a partir de [x, y, z] o de un objeto con x, y, z">
+<a class="sig" href="#vector3d.from.static"><code>static from(v)</code></a>
+<p class="doc">un Vector3d a partir de [x, y, z] o de un objeto con x, y, z</p>
+</div>
+<div class="m" id="vector3d.xAxis.static" data-q="vector3d una direccion con largo static xaxis el &lt;1, 0, 0&gt;">
+<a class="sig" href="#vector3d.xAxis.static"><code>static xAxis</code></a>
+<p class="doc">el &lt;1, 0, 0&gt;</p>
+</div>
+<div class="m" id="vector3d.yAxis.static" data-q="vector3d una direccion con largo static yaxis el &lt;0, 1, 0&gt;">
+<a class="sig" href="#vector3d.yAxis.static"><code>static yAxis</code></a>
+<p class="doc">el &lt;0, 1, 0&gt;</p>
+</div>
+<div class="m" id="vector3d.zAxis.static" data-q="vector3d una direccion con largo static zaxis el &lt;0, 0, 1&gt;">
+<a class="sig" href="#vector3d.zAxis.static"><code>static zAxis</code></a>
+<p class="doc">el &lt;0, 0, 1&gt;</p>
+</div>
+<div class="m" id="vector3d.length" data-q="vector3d una direccion con largo length su largo">
+<a class="sig" href="#vector3d.length"><code>length</code></a>
+<p class="doc">su largo</p>
+</div>
+<div class="m" id="vector3d.unitize" data-q="vector3d una direccion con largo unitize() el mismo vector con largo 1">
+<a class="sig" href="#vector3d.unitize"><code>unitize()</code></a>
+<p class="doc">el mismo vector con largo 1</p>
+</div>
+<div class="m" id="vector3d.multiply" data-q="vector3d una direccion con largo multiply(s) el vector multiplicado por un numero">
+<a class="sig" href="#vector3d.multiply"><code>multiply(s)</code></a>
+<p class="doc">el vector multiplicado por un número</p>
+</div>
+<div class="m" id="vector3d.add" data-q="vector3d una direccion con largo add(v) la suma con otro vector">
+<a class="sig" href="#vector3d.add"><code>add(v)</code></a>
+<p class="doc">la suma con otro vector</p>
+</div>
+<div class="m" id="vector3d.reverse" data-q="vector3d una direccion con largo reverse() el vector al reves">
+<a class="sig" href="#vector3d.reverse"><code>reverse()</code></a>
+<p class="doc">el vector al revés</p>
+</div>
+<div class="m" id="vector3d.dot" data-q="vector3d una direccion con largo dot(v) producto escalar">
+<a class="sig" href="#vector3d.dot"><code>dot(v)</code></a>
+<p class="doc">producto escalar</p>
+</div>
+<div class="m" id="vector3d.cross" data-q="vector3d una direccion con largo cross(v) producto vectorial: perpendicular a los dos">
+<a class="sig" href="#vector3d.cross"><code>cross(v)</code></a>
+<p class="doc">producto vectorial: perpendicular a los dos</p>
+</div>
+<div class="m" id="vector3d.angleTo" data-q="vector3d una direccion con largo angleto(v) el angulo con otro vector, en grados">
+<a class="sig" href="#vector3d.angleTo"><code>angleTo(v)</code></a>
+<p class="doc">el ángulo con otro vector, en grados</p>
+</div>
+<div class="m" id="vector3d.transform" data-q="vector3d una direccion con largo transform(t) el vector girado (la traslacion no lo afecta)">
+<a class="sig" href="#vector3d.transform"><code>transform(t)</code></a>
+<p class="doc">el vector girado (la traslación no lo afecta)</p>
+</div>
+<div class="m" id="vector3d.equals" data-q="vector3d una direccion con largo equals(v, tol?) ¿es el mismo vector, con tolerancia?">
+<a class="sig" href="#vector3d.equals"><code>equals(v, tol?)</code></a>
+<p class="doc">¿es el mismo vector, con tolerancia?</p>
+</div>
+<div class="m" id="vector3d.toArray" data-q="vector3d una direccion con largo toarray() [x, y, z]">
+<a class="sig" href="#vector3d.toArray"><code>toArray()</code></a>
+<p class="doc">[x, y, z]</p>
+</div>
+<div class="m" id="vector3d.toString" data-q="vector3d una direccion con largo tostring() para leer: &lt;x, y, z&gt;">
+<a class="sig" href="#vector3d.toString"><code>toString()</code></a>
+<p class="doc">para leer: &lt;x, y, z&gt;</p>
+</div>
+<div class="m" id="vector3d.help" data-q="vector3d una direccion con largo help() esta tabla">
+<a class="sig" href="#vector3d.help"><code>help()</code></a>
+<p class="doc">esta tabla</p>
+</div>
+<div class="m" id="vector3d.help.static" data-q="vector3d una direccion con largo static help() esta tabla, sin crear una instancia">
+<a class="sig" href="#vector3d.help.static"><code>static help()</code></a>
+<p class="doc">esta tabla, sin crear una instancia</p>
+</div>
+</div>
+
+</section>
+<section id="line" data-sec="line">
+<header><p class="grupo">Valores</p><h2>Line</h2><p class="tag">un segmento entre dos puntos</p>
+</header>
+<div class="lista">
+<div class="m" id="line.new Line(from, to)" data-q="line un segmento entre dos puntos new line(from, to) un segmento nuevo">
+<a class="sig" href="#line.new Line(from, to)"><code>new Line(from, to)</code></a>
+<p class="doc">un segmento nuevo</p>
+</div>
+<div class="m" id="line.from" data-q="line un segmento entre dos puntos from  to sus dos puntas (point3d)">
+<a class="sig" href="#line.from"><code>from  to</code></a>
+<p class="doc">sus dos puntas (Point3d)</p>
+</div>
+<div class="m" id="line.length" data-q="line un segmento entre dos puntos length su largo">
+<a class="sig" href="#line.length"><code>length</code></a>
+<p class="doc">su largo</p>
+</div>
+<div class="m" id="line.direction" data-q="line un segmento entre dos puntos direction el vector3d de from a to">
+<a class="sig" href="#line.direction"><code>direction</code></a>
+<p class="doc">el Vector3d de from a to</p>
+</div>
+<div class="m" id="line.midpoint" data-q="line un segmento entre dos puntos midpoint el punto del medio">
+<a class="sig" href="#line.midpoint"><code>midpoint</code></a>
+<p class="doc">el punto del medio</p>
+</div>
+<div class="m" id="line.transform" data-q="line un segmento entre dos puntos transform(t) el segmento transformado (devuelve uno nuevo)">
+<a class="sig" href="#line.transform"><code>transform(t)</code></a>
+<p class="doc">el segmento transformado (devuelve uno nuevo)</p>
+</div>
+<div class="m" id="line.toString" data-q="line un segmento entre dos puntos tostring() para leer">
+<a class="sig" href="#line.toString"><code>toString()</code></a>
+<p class="doc">para leer</p>
+</div>
+<div class="m" id="line.help" data-q="line un segmento entre dos puntos help() esta tabla">
+<a class="sig" href="#line.help"><code>help()</code></a>
+<p class="doc">esta tabla</p>
+</div>
+<div class="m" id="line.help.static" data-q="line un segmento entre dos puntos static help() esta tabla, sin crear una instancia">
+<a class="sig" href="#line.help.static"><code>static help()</code></a>
+<p class="doc">esta tabla, sin crear una instancia</p>
+</div>
+</div>
+
+</section>
+<section id="boundingbox" data-sec="boundingbox">
+<header><p class="grupo">Valores</p><h2>BoundingBox</h2><p class="tag">la caja alineada a los ejes que encierra algo</p>
+</header>
+<div class="lista">
+<div class="m" id="boundingbox.new BoundingBox(min, max)" data-q="boundingbox la caja alineada a los ejes que encierra algo new boundingbox(min, max) una caja nueva">
+<a class="sig" href="#boundingbox.new BoundingBox(min, max)"><code>new BoundingBox(min, max)</code></a>
+<p class="doc">una caja nueva</p>
+</div>
+<div class="m" id="boundingbox.min" data-q="boundingbox la caja alineada a los ejes que encierra algo min  max sus dos esquinas opuestas (point3d)">
+<a class="sig" href="#boundingbox.min"><code>min  max</code></a>
+<p class="doc">sus dos esquinas opuestas (Point3d)</p>
+</div>
+<div class="m" id="boundingbox.fromPoints.static" data-q="boundingbox la caja alineada a los ejes que encierra algo static frompoints(points) la caja que encierra a todos los puntos">
+<a class="sig" href="#boundingbox.fromPoints.static"><code>static fromPoints(points)</code></a>
+<p class="doc">la caja que encierra a todos los puntos</p>
+</div>
+<div class="m" id="boundingbox.center" data-q="boundingbox la caja alineada a los ejes que encierra algo center el centro">
+<a class="sig" href="#boundingbox.center"><code>center</code></a>
+<p class="doc">el centro</p>
+</div>
+<div class="m" id="boundingbox.diagonal" data-q="boundingbox la caja alineada a los ejes que encierra algo diagonal de min a max: ancho, alto y profundidad">
+<a class="sig" href="#boundingbox.diagonal"><code>diagonal</code></a>
+<p class="doc">de min a max: ancho, alto y profundidad</p>
+</div>
+<div class="m" id="boundingbox.corners" data-q="boundingbox la caja alineada a los ejes que encierra algo corners las 8 esquinas">
+<a class="sig" href="#boundingbox.corners"><code>corners</code></a>
+<p class="doc">las 8 esquinas</p>
+</div>
+<div class="m" id="boundingbox.contains" data-q="boundingbox la caja alineada a los ejes que encierra algo contains(p, tol?) ¿el punto esta adentro?">
+<a class="sig" href="#boundingbox.contains"><code>contains(p, tol?)</code></a>
+<p class="doc">¿el punto está adentro?</p>
+</div>
+<div class="m" id="boundingbox.union" data-q="boundingbox la caja alineada a los ejes que encierra algo union(b) la caja que encierra a las dos">
+<a class="sig" href="#boundingbox.union"><code>union(b)</code></a>
+<p class="doc">la caja que encierra a las dos</p>
+</div>
+<div class="m" id="boundingbox.transform" data-q="boundingbox la caja alineada a los ejes que encierra algo transform(t) la caja que encierra a esta, transformada">
+<a class="sig" href="#boundingbox.transform"><code>transform(t)</code></a>
+<p class="doc">la caja que encierra a esta, transformada</p>
+</div>
+<div class="m" id="boundingbox.toString" data-q="boundingbox la caja alineada a los ejes que encierra algo tostring() para leer">
+<a class="sig" href="#boundingbox.toString"><code>toString()</code></a>
+<p class="doc">para leer</p>
+</div>
+<div class="m" id="boundingbox.help" data-q="boundingbox la caja alineada a los ejes que encierra algo help() esta tabla">
+<a class="sig" href="#boundingbox.help"><code>help()</code></a>
+<p class="doc">esta tabla</p>
+</div>
+<div class="m" id="boundingbox.help.static" data-q="boundingbox la caja alineada a los ejes que encierra algo static help() esta tabla, sin crear una instancia">
+<a class="sig" href="#boundingbox.help.static"><code>static help()</code></a>
+<p class="doc">esta tabla, sin crear una instancia</p>
+</div>
+</div>
+
+</section>
+<section id="face" data-sec="face">
+<header><p class="grupo">Valores</p><h2>Face</h2><p class="tag">una cara de una pieza</p>
+</header>
+<div class="lista">
+<div class="m" id="face.piece" data-q="face una cara de una pieza piece el id de la pieza">
+<a class="sig" href="#face.piece"><code>piece</code></a>
+<p class="doc">el id de la pieza</p>
+</div>
+<div class="m" id="face.localAxis" data-q="face una cara de una pieza localaxis  localside cual cara es en la pieza: eje local y lado (+1 o -1); null si no mira hacia un eje">
+<a class="sig" href="#face.localAxis"><code>localAxis  localSide</code></a>
+<p class="doc">cuál cara es en la pieza: eje local y lado (+1 o -1); null si no mira hacia un eje</p>
+</div>
+<div class="m" id="face.normal" data-q="face una cara de una pieza normal hacia donde mira (vector3d)">
+<a class="sig" href="#face.normal"><code>normal</code></a>
+<p class="doc">hacia dónde mira (Vector3d)</p>
+</div>
+<div class="m" id="face.center" data-q="face una cara de una pieza center su centro (point3d)">
+<a class="sig" href="#face.center"><code>center</code></a>
+<p class="doc">su centro (Point3d)</p>
+</div>
+<div class="m" id="face.vertices" data-q="face una cara de una pieza vertices su contorno, en orden (4 esquinas en una caja)">
+<a class="sig" href="#face.vertices"><code>vertices</code></a>
+<p class="doc">su contorno, en orden (4 esquinas en una caja)</p>
+</div>
+<div class="m" id="face.holes" data-q="face una cara de una pieza holes sus agujeros: un contorno por agujero (vacio en una caja)">
+<a class="sig" href="#face.holes"><code>holes</code></a>
+<p class="doc">sus agujeros: un contorno por agujero (vacío en una caja)</p>
+</div>
+<div class="m" id="face.edges" data-q="face una cara de una pieza edges sus aristas (line), las del contorno y las de los agujeros">
+<a class="sig" href="#face.edges"><code>edges</code></a>
+<p class="doc">sus aristas (Line), las del contorno y las de los agujeros</p>
+</div>
+<div class="m" id="face.area" data-q="face una cara de una pieza area su superficie sin los agujeros, en unidades del documento al cuadrado">
+<a class="sig" href="#face.area"><code>area</code></a>
+<p class="doc">su superficie sin los agujeros, en unidades del documento al cuadrado</p>
+</div>
+<div class="m" id="face.transform" data-q="face una cara de una pieza transform(t) la cara transformada (devuelve una nueva)">
+<a class="sig" href="#face.transform"><code>transform(t)</code></a>
+<p class="doc">la cara transformada (devuelve una nueva)</p>
+</div>
+<div class="m" id="face.toString" data-q="face una cara de una pieza tostring() para leer">
+<a class="sig" href="#face.toString"><code>toString()</code></a>
+<p class="doc">para leer</p>
+</div>
+<div class="m" id="face.help" data-q="face una cara de una pieza help() esta tabla">
+<a class="sig" href="#face.help"><code>help()</code></a>
+<p class="doc">esta tabla</p>
+</div>
+<div class="m" id="face.help.static" data-q="face una cara de una pieza static help() esta tabla, sin crear una instancia">
+<a class="sig" href="#face.help.static"><code>static help()</code></a>
+<p class="doc">esta tabla, sin crear una instancia</p>
+</div>
+</div>
+
+</section>
+<section id="transform" data-sec="transform">
+<header><p class="grupo">Valores</p><h2>Transform</h2><p class="tag">mover y girar: el verbo común a toda geometría</p>
+</header>
+<div class="lista">
+<div class="m" id="transform.identity.static" data-q="transform mover y girar: el verbo comun a toda geometria static identity() la que no hace nada">
+<a class="sig" href="#transform.identity.static"><code>static identity()</code></a>
+<p class="doc">la que no hace nada</p>
+</div>
+<div class="m" id="transform.translation.static" data-q="transform mover y girar: el verbo comun a toda geometria static translation(v) / translation(from, to) trasladar por un vector, o de un punto a otro">
+<a class="sig" href="#transform.translation.static"><code>static translation(v) / translation(from, to)</code></a>
+<p class="doc">trasladar por un vector, o de un punto a otro</p>
+</div>
+<div class="m" id="transform.rotation.static" data-q="transform mover y girar: el verbo comun a toda geometria static rotation(degrees, axis?, center?) girar en grados; eje 'x' | 'y' | 'z' o un vector; centro por defecto el origen">
+<a class="sig" href="#transform.rotation.static"><code>static rotation(degrees, axis?, center?)</code></a>
+<p class="doc">girar en grados; eje 'x' | 'y' | 'z' o un vector; centro por defecto el origen</p>
+</div>
+<div class="m" id="transform.orient.static" data-q="transform mover y girar: el verbo comun a toda geometria static orient(facea, faceb, { facetoward?, flip? }) lleva la cara a sobre la b (centros juntos, enfrentadas o del mismo lado); flip gira 180°">
+<a class="sig" href="#transform.orient.static"><code>static orient(faceA, faceB, { faceToward?, flip? })</code></a>
+<p class="doc">lleva la cara A sobre la B (centros juntos, enfrentadas o del mismo lado); flip gira 180°</p>
+</div>
+<div class="m" id="transform.fromEuler.static" data-q="transform mover y girar: el verbo comun a toda geometria static fromeuler(radians) el giro de un euler xyz en radianes (rx · ry · rz), la convencion 'xyz' de three.js; sin traslacion">
+<a class="sig" href="#transform.fromEuler.static"><code>static fromEuler(radians)</code></a>
+<p class="doc">el giro de un Euler XYZ en radianes (Rx · Ry · Rz), la convención 'XYZ' de three.js; sin traslación</p>
+</div>
+<div class="m" id="transform.apply.static" data-q="transform mover y girar: el verbo comun a toda geometria static apply(t, items) aplicarla a todo un array (piezas, ensambles, puntos…)">
+<a class="sig" href="#transform.apply.static"><code>static apply(t, items)</code></a>
+<p class="doc">aplicarla a todo un array (piezas, ensambles, puntos…)</p>
+</div>
+<div class="m" id="transform.check.static" data-q="transform mover y girar: el verbo comun a toda geometria static check(t) falla con un mensaje claro si t no es un transform">
+<a class="sig" href="#transform.check.static"><code>static check(t)</code></a>
+<p class="doc">falla con un mensaje claro si t no es un Transform</p>
+</div>
+<div class="m" id="transform.frame" data-q="transform mover y girar: el verbo comun a toda geometria frame la matriz por dentro: { r (3×3 por filas), t }">
+<a class="sig" href="#transform.frame"><code>frame</code></a>
+<p class="doc">la matriz por dentro: { r (3×3 por filas), t }</p>
+</div>
+<div class="m" id="transform.multiply" data-q="transform mover y girar: el verbo comun a toda geometria multiply(other) componer: primero other, despues esta">
+<a class="sig" href="#transform.multiply"><code>multiply(other)</code></a>
+<p class="doc">componer: primero other, después esta</p>
+</div>
+<div class="m" id="transform.inverse" data-q="transform mover y girar: el verbo comun a toda geometria inverse() la que deshace a esta">
+<a class="sig" href="#transform.inverse"><code>inverse()</code></a>
+<p class="doc">la que deshace a esta</p>
+</div>
+<div class="m" id="transform.isIdentity" data-q="transform mover y girar: el verbo comun a toda geometria isidentity ¿no hace nada?">
+<a class="sig" href="#transform.isIdentity"><code>isIdentity</code></a>
+<p class="doc">¿no hace nada?</p>
+</div>
+<div class="m" id="transform.isQuarterTurn" data-q="transform mover y girar: el verbo comun a toda geometria isquarterturn ¿gira solo en cuartos de vuelta?">
+<a class="sig" href="#transform.isQuarterTurn"><code>isQuarterTurn</code></a>
+<p class="doc">¿gira solo en cuartos de vuelta?</p>
+</div>
+<div class="m" id="transform.translationVector" data-q="transform mover y girar: el verbo comun a toda geometria translationvector cuanto traslada (vector3d)">
+<a class="sig" href="#transform.translationVector"><code>translationVector</code></a>
+<p class="doc">cuánto traslada (Vector3d)</p>
+</div>
+<div class="m" id="transform.eulerDegrees" data-q="transform mover y girar: el verbo comun a toda geometria eulerdegrees el giro como euler xyz, en grados">
+<a class="sig" href="#transform.eulerDegrees"><code>eulerDegrees</code></a>
+<p class="doc">el giro como Euler XYZ, en grados</p>
+</div>
+<div class="m" id="transform.toString" data-q="transform mover y girar: el verbo comun a toda geometria tostring() para leer">
+<a class="sig" href="#transform.toString"><code>toString()</code></a>
+<p class="doc">para leer</p>
+</div>
+<div class="m" id="transform.help" data-q="transform mover y girar: el verbo comun a toda geometria help() esta tabla">
+<a class="sig" href="#transform.help"><code>help()</code></a>
+<p class="doc">esta tabla</p>
+</div>
+<div class="m" id="transform.help.static" data-q="transform mover y girar: el verbo comun a toda geometria static help() esta tabla, sin crear una instancia">
+<a class="sig" href="#transform.help.static"><code>static help()</code></a>
+<p class="doc">esta tabla, sin crear una instancia</p>
+</div>
+</div>
+
+</section>
+<section id="contact" data-sec="contact">
+<header><p class="grupo">Valores</p><h2>Contact</h2><p class="tag">dónde se tocan dos piezas</p>
+</header>
+<div class="lista">
+<div class="m" id="contact.kind" data-q="contact donde se tocan dos piezas kind 'face' (se tocan dos caras), 'edge' (una arista apoyada) o 'point' (un vertice)">
+<a class="sig" href="#contact.kind"><code>kind</code></a>
+<p class="doc">'face' (se tocan dos caras), 'edge' (una arista apoyada) o 'point' (un vértice)</p>
+</div>
+<div class="m" id="contact.a" data-q="contact donde se tocan dos piezas a  b los ids de las dos piezas">
+<a class="sig" href="#contact.a"><code>a  b</code></a>
+<p class="doc">los ids de las dos piezas</p>
+</div>
+<div class="m" id="contact.points" data-q="contact donde se tocan dos piezas points face: el poligono donde se solapan · edge: sus dos puntas · point: el punto">
+<a class="sig" href="#contact.points"><code>points</code></a>
+<p class="doc">face: el polígono donde se solapan · edge: sus dos puntas · point: el punto</p>
+</div>
+<div class="m" id="contact.area" data-q="contact donde se tocan dos piezas area la superficie de contacto, en unidades del documento al cuadrado (0 si es arista o punto)">
+<a class="sig" href="#contact.area"><code>area</code></a>
+<p class="doc">la superficie de contacto, en unidades del documento al cuadrado (0 si es arista o punto)</p>
+</div>
+<div class="m" id="contact.normal" data-q="contact donde se tocan dos piezas normal hacia donde mira el contacto, de a hacia b (vector3d)">
+<a class="sig" href="#contact.normal"><code>normal</code></a>
+<p class="doc">hacia dónde mira el contacto, de a hacia b (Vector3d)</p>
+</div>
+<div class="m" id="contact.faceA" data-q="contact donde se tocan dos piezas facea  faceb cual cara de cada pieza, en la pieza: { localaxis, localside } (null si no es de cara)">
+<a class="sig" href="#contact.faceA"><code>faceA  faceB</code></a>
+<p class="doc">cuál cara de cada pieza, en la pieza: { localAxis, localSide } (null si no es de cara)</p>
+</div>
+<div class="m" id="contact.center" data-q="contact donde se tocan dos piezas center el centro del contacto">
+<a class="sig" href="#contact.center"><code>center</code></a>
+<p class="doc">el centro del contacto</p>
+</div>
+<div class="m" id="contact.line" data-q="contact donde se tocan dos piezas line la arista de contacto (line), si es de arista; si no, null">
+<a class="sig" href="#contact.line"><code>line</code></a>
+<p class="doc">la arista de contacto (Line), si es de arista; si no, null</p>
+</div>
+<div class="m" id="contact.transform" data-q="contact donde se tocan dos piezas transform(t) el contacto transformado (devuelve uno nuevo)">
+<a class="sig" href="#contact.transform"><code>transform(t)</code></a>
+<p class="doc">el contacto transformado (devuelve uno nuevo)</p>
+</div>
+<div class="m" id="contact.toString" data-q="contact donde se tocan dos piezas tostring() para leer">
+<a class="sig" href="#contact.toString"><code>toString()</code></a>
+<p class="doc">para leer</p>
+</div>
+<div class="m" id="contact.help" data-q="contact donde se tocan dos piezas help() esta tabla">
+<a class="sig" href="#contact.help"><code>help()</code></a>
+<p class="doc">esta tabla</p>
+</div>
+<div class="m" id="contact.help.static" data-q="contact donde se tocan dos piezas static help() esta tabla, sin crear un contacto">
+<a class="sig" href="#contact.help.static"><code>static help()</code></a>
+<p class="doc">esta tabla, sin crear un contacto</p>
+</div>
+</div>
+
+</section>
+<section id="intersection" data-sec="intersection">
+<header><p class="grupo">Valores</p><h2>Intersection</h2><p class="tag">dos piezas que se meten una en otra</p>
+</header>
+<div class="lista">
+<div class="m" id="intersection.a" data-q="intersection dos piezas que se meten una en otra a  b los ids de las dos piezas">
+<a class="sig" href="#intersection.a"><code>a  b</code></a>
+<p class="doc">los ids de las dos piezas</p>
+</div>
+<div class="m" id="intersection.volume" data-q="intersection dos piezas que se meten una en otra volume el volumen compartido, en unidades del documento al cubo">
+<a class="sig" href="#intersection.volume"><code>volume</code></a>
+<p class="doc">el volumen compartido, en unidades del documento al cubo</p>
+</div>
+<div class="m" id="intersection.depth" data-q="intersection dos piezas que se meten una en otra depth cuanto se meten: lo minimo que habria que correr una (en unidades del documento)">
+<a class="sig" href="#intersection.depth"><code>depth</code></a>
+<p class="doc">cuánto se meten: lo mínimo que habría que correr una (en unidades del documento)</p>
+</div>
+<div class="m" id="intersection.vertices" data-q="intersection dos piezas que se meten una en otra vertices los vertices del solido compartido">
+<a class="sig" href="#intersection.vertices"><code>vertices</code></a>
+<p class="doc">los vértices del sólido compartido</p>
+</div>
+<div class="m" id="intersection.faces" data-q="intersection dos piezas que se meten una en otra faces sus caras, como poligonos de point3d">
+<a class="sig" href="#intersection.faces"><code>faces</code></a>
+<p class="doc">sus caras, como polígonos de Point3d</p>
+</div>
+<div class="m" id="intersection.boundingBox" data-q="intersection dos piezas que se meten una en otra boundingbox la caja que lo encierra">
+<a class="sig" href="#intersection.boundingBox"><code>boundingBox</code></a>
+<p class="doc">la caja que lo encierra</p>
+</div>
+<div class="m" id="intersection.transform" data-q="intersection dos piezas que se meten una en otra transform(t) transformado (devuelve uno nuevo)">
+<a class="sig" href="#intersection.transform"><code>transform(t)</code></a>
+<p class="doc">transformado (devuelve uno nuevo)</p>
+</div>
+<div class="m" id="intersection.toString" data-q="intersection dos piezas que se meten una en otra tostring() para leer">
+<a class="sig" href="#intersection.toString"><code>toString()</code></a>
+<p class="doc">para leer</p>
+</div>
+<div class="m" id="intersection.help" data-q="intersection dos piezas que se meten una en otra help() esta tabla">
+<a class="sig" href="#intersection.help"><code>help()</code></a>
+<p class="doc">esta tabla</p>
+</div>
+<div class="m" id="intersection.help.static" data-q="intersection dos piezas que se meten una en otra static help() esta tabla, sin crear una">
+<a class="sig" href="#intersection.help.static"><code>static help()</code></a>
+<p class="doc">esta tabla, sin crear una</p>
+</div>
+</div>
+
+</section>
+<section id="mesh" data-sec="mesh">
+<header><p class="grupo">Valores</p><h2>Mesh</h2><p class="tag">una malla de triángulos: la forma que resulta de una pieza</p>
+</header>
+<div class="lista">
+<div class="m" id="mesh.new Mesh({ positions, indices })" data-q="mesh una malla de triangulos: la forma que resulta de una pieza new mesh({ positions, indices }) una malla nueva">
+<a class="sig" href="#mesh.new Mesh({ positions, indices })"><code>new Mesh({ positions, indices })</code></a>
+<p class="doc">una malla nueva</p>
+</div>
+<div class="m" id="mesh.positions" data-q="mesh una malla de triangulos: la forma que resulta de una pieza positions x, y, z de cada vertice, uno detras de otro">
+<a class="sig" href="#mesh.positions"><code>positions</code></a>
+<p class="doc">x, y, z de cada vértice, uno detrás de otro</p>
+</div>
+<div class="m" id="mesh.indices" data-q="mesh una malla de triangulos: la forma que resulta de una pieza indices de a tres: los vertices de cada triangulo, antihorario visto desde afuera">
+<a class="sig" href="#mesh.indices"><code>indices</code></a>
+<p class="doc">de a tres: los vértices de cada triángulo, antihorario visto desde afuera</p>
+</div>
+<div class="m" id="mesh.surfaces" data-q="mesh una malla de triangulos: la forma que resulta de una pieza surfaces a que superficie pertenece cada triangulo, o null si no se sabe">
+<a class="sig" href="#mesh.surfaces"><code>surfaces</code></a>
+<p class="doc">a qué superficie pertenece cada triángulo, o null si no se sabe</p>
+</div>
+<div class="m" id="mesh.smooth" data-q="mesh una malla de triangulos: la forma que resulta de una pieza smooth por superficie: ¿aproxima una curva? (o null)">
+<a class="sig" href="#mesh.smooth"><code>smooth</code></a>
+<p class="doc">por superficie: ¿aproxima una curva? (o null)</p>
+</div>
+<div class="m" id="mesh.from.static" data-q="mesh una malla de triangulos: la forma que resulta de una pieza static from(m) una mesh a partir de cualquier { positions, indices }">
+<a class="sig" href="#mesh.from.static"><code>static from(m)</code></a>
+<p class="doc">una Mesh a partir de cualquier { positions, indices }</p>
+</div>
+<div class="m" id="mesh.vertexCount" data-q="mesh una malla de triangulos: la forma que resulta de una pieza vertexcount cuantos vertices tiene">
+<a class="sig" href="#mesh.vertexCount"><code>vertexCount</code></a>
+<p class="doc">cuántos vértices tiene</p>
+</div>
+<div class="m" id="mesh.triangleCount" data-q="mesh una malla de triangulos: la forma que resulta de una pieza trianglecount cuantos triangulos tiene">
+<a class="sig" href="#mesh.triangleCount"><code>triangleCount</code></a>
+<p class="doc">cuántos triángulos tiene</p>
+</div>
+<div class="m" id="mesh.volume" data-q="mesh una malla de triangulos: la forma que resulta de una pieza volume el volumen que encierra">
+<a class="sig" href="#mesh.volume"><code>volume</code></a>
+<p class="doc">el volumen que encierra</p>
+</div>
+<div class="m" id="mesh.boundingBox" data-q="mesh una malla de triangulos: la forma que resulta de una pieza boundingbox la caja que la encierra">
+<a class="sig" href="#mesh.boundingBox"><code>boundingBox</code></a>
+<p class="doc">la caja que la encierra</p>
+</div>
+<div class="m" id="mesh.transform" data-q="mesh una malla de triangulos: la forma que resulta de una pieza transform(t) la malla transformada (devuelve una nueva)">
+<a class="sig" href="#mesh.transform"><code>transform(t)</code></a>
+<p class="doc">la malla transformada (devuelve una nueva)</p>
+</div>
+<div class="m" id="mesh.toString" data-q="mesh una malla de triangulos: la forma que resulta de una pieza tostring() para leer">
+<a class="sig" href="#mesh.toString"><code>toString()</code></a>
+<p class="doc">para leer</p>
+</div>
+<div class="m" id="mesh.help" data-q="mesh una malla de triangulos: la forma que resulta de una pieza help() esta tabla">
+<a class="sig" href="#mesh.help"><code>help()</code></a>
+<p class="doc">esta tabla</p>
+</div>
+<div class="m" id="mesh.help.static" data-q="mesh una malla de triangulos: la forma que resulta de una pieza static help() esta tabla, sin crear una instancia">
+<a class="sig" href="#mesh.help.static"><code>static help()</code></a>
+<p class="doc">esta tabla, sin crear una instancia</p>
+</div>
+</div>
+
+</section>
+<section id="three" data-sec="three">
+<header><p class="grupo">Adaptador</p><h2>createThreeView</h2><p class="tag">el adaptador de three ('threejs-cad-sdk/three')</p>
+<p class="intro">Lo único del SDK que importa three. No es dueño de nada: escucha los eventos del documento y deja cada malla donde el modelo dice. Renderer, cámara y controles son de la app.</p></header>
+<div class="lista">
+<div class="m" id="three.createThreeView" data-q="createthreeview el adaptador de three ('threejs-cad-sdk/three') createthreeview(workshop, { scene, geometryfor?, materialfor?, colors? }) espeja el documento en una escena de three: cuelga un grupo en scene y lo mantiene al dia con los eventos del modelo. geometryfor(piece) y materialfor(piece) son los ganchos de la app (por defecto: la forma que resulta y un gris neutro). colors: { edge, highlight, contact, collision }">
+<a class="sig" href="#three.createThreeView"><code>createThreeView(workshop, { scene, geometryFor?, materialFor?, colors? })</code></a>
+<p class="doc">espeja el documento en una escena de three: cuelga un grupo en scene y lo mantiene al día con los eventos del modelo. geometryFor(piece) y materialFor(piece) son los ganchos de la app (por defecto: la forma que resulta y un gris neutro). colors: { edge, highlight, contact, collision }</p>
+</div>
+<div class="m" id="three.group" data-q="createthreeview el adaptador de three ('threejs-cad-sdk/three') group el grupo que el adaptador cuelga en la escena">
+<a class="sig" href="#three.group"><code>group</code></a>
+<p class="doc">el grupo que el adaptador cuelga en la escena</p>
+</div>
+<div class="m" id="three.meshes" data-q="createthreeview el adaptador de three ('threejs-cad-sdk/three') meshes las mallas por id de pieza (las de adentro de una instancia, con su id de camino), para elegir con un raycaster">
+<a class="sig" href="#three.meshes"><code>meshes</code></a>
+<p class="doc">las mallas por id de pieza (las de adentro de una instancia, con su id de camino), para elegir con un raycaster</p>
+</div>
+<div class="m" id="three.sync" data-q="createthreeview el adaptador de three ('threejs-cad-sdk/three') sync() sincroniza ya, sin esperar al proximo cuadro">
+<a class="sig" href="#three.sync"><code>sync()</code></a>
+<p class="doc">sincroniza ya, sin esperar al próximo cuadro</p>
+</div>
+<div class="m" id="three.show" data-q="createthreeview el adaptador de three ('threejs-cad-sdk/three') show capas de ayuda: show.axes(on), show.boxes(on), show.labels(on) (necesita un css2drenderer) y show.contacts(on) (verde donde se tocan, rojo donde chocan)">
+<a class="sig" href="#three.show"><code>show</code></a>
+<p class="doc">capas de ayuda: show.axes(on), show.boxes(on), show.labels(on) (necesita un CSS2DRenderer) y show.contacts(on) (verde donde se tocan, rojo donde chocan)</p>
+</div>
+<div class="m" id="three.highlight" data-q="createthreeview el adaptador de three ('threejs-cad-sdk/three') highlight(...parts) resalta partes, con todo lo de adentro; sin argumentos, apaga">
+<a class="sig" href="#three.highlight"><code>highlight(...parts)</code></a>
+<p class="doc">resalta partes, con todo lo de adentro; sin argumentos, apaga</p>
+</div>
+<div class="m" id="three.rebuild" data-q="createthreeview el adaptador de three ('threejs-cad-sdk/three') rebuild() rehace todas las mallas (si cambio lo que devuelven los ganchos)">
+<a class="sig" href="#three.rebuild"><code>rebuild()</code></a>
+<p class="doc">rehace todas las mallas (si cambió lo que devuelven los ganchos)</p>
+</div>
+<div class="m" id="three.dispose" data-q="createthreeview el adaptador de three ('threejs-cad-sdk/three') dispose() se desengancha del modelo y saca todo de la escena">
+<a class="sig" href="#three.dispose"><code>dispose()</code></a>
+<p class="doc">se desengancha del modelo y saca todo de la escena</p>
+</div>
+</div>
+
+</section>
+<p class="nada oculto" id="nada">Nada coincide. Probá con menos palabras, o con el nombre en inglés del método (<code>addPiece</code>, <code>contactsWith</code>…).</p>
+<footer>Generada por <code>scripts/docs.mjs</code> desde las tablas de <code>help()</code>, que una prueba verifica contra el código. Para entender cómo se usa cada cosa, la <a href="https://github.com/EasyIndustry/ThreeJS-cad-SDK#readme">guía del README</a>. MIT © EasyIndustry.</footer>
+</main>
+</div>
+<script>
+(() => {
+  const q = document.getElementById('q');
+  const estado = document.getElementById('estado');
+  const nada = document.getElementById('nada');
+  const filas = [...document.querySelectorAll('.m')];
+  const secs = [...document.querySelectorAll('section')];
+  const enlaces = new Map([...document.querySelectorAll('nav a[data-sec]')].map((a) => [a.dataset.sec, a]));
+  const original = new Map();
+  const plano = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const marcar = (el, palabras) => {
+    if (!original.has(el)) original.set(el, el.innerHTML);
+    el.innerHTML = original.get(el);
+    if (!palabras.length) return;
+    const andar = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const nodos = [];
+    while (andar.nextNode()) nodos.push(andar.currentNode);
+    for (const n of nodos) {
+      const t = n.nodeValue, p = plano(t);
+      const tramos = [];
+      for (const w of palabras) for (let i = p.indexOf(w); i >= 0; i = p.indexOf(w, i + 1)) tramos.push([i, i + w.length]);
+      if (!tramos.length) continue;
+      tramos.sort((a, b) => a[0] - b[0]);
+      const f = document.createDocumentFragment();
+      let k = 0;
+      for (const [a, b] of tramos) {
+        if (a < k) continue;
+        f.append(t.slice(k, a));
+        const m = document.createElement('mark');
+        m.textContent = t.slice(a, b);
+        f.append(m);
+        k = b;
+      }
+      f.append(t.slice(k));
+      n.replaceWith(f);
+    }
+  };
+  const filtrar = () => {
+    const palabras = plano(q.value).split(/\s+/).filter(Boolean);
+    let vistas = 0;
+    for (const f of filas) {
+      const ok = palabras.every((w) => f.dataset.q.includes(w));
+      f.classList.toggle('oculto', !ok);
+      if (ok) vistas++;
+      if (ok) for (const el of f.querySelectorAll('.sig code, .doc')) marcar(el, palabras);
+    }
+    for (const s of secs) {
+      const hay = s.querySelector('.m:not(.oculto)');
+      s.classList.toggle('oculto', !!palabras.length && !hay);
+      const a = enlaces.get(s.dataset.sec);
+      if (a) a.classList.toggle('vacio', !!palabras.length && !hay);
+      const h3 = s.querySelector('.valores');
+      if (h3) h3.classList.toggle('oculto', !h3.querySelector('.m:not(.oculto)'));
+    }
+    nada.classList.toggle('oculto', !palabras.length || vistas > 0);
+    estado.textContent = palabras.length ? (vistas === 1 ? '1 resultado' : vistas + ' resultados') : '';
+    const url = new URL(location.href);
+    if (q.value) url.searchParams.set('q', q.value); else url.searchParams.delete('q');
+    history.replaceState(null, '', url);
+  };
+  q.addEventListener('input', filtrar);
+  q.addEventListener('keydown', (e) => { if (e.key === 'Escape') { q.value = ''; filtrar(); q.blur(); } });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && document.activeElement !== q) { e.preventDefault(); q.focus(); q.select(); }
+  });
+  const inicial = new URL(location.href).searchParams.get('q');
+  if (inicial) { q.value = inicial; filtrar(); }
+  // la sección que se está leyendo, marcada en el índice
+  const ver = new IntersectionObserver((es) => {
+    for (const e of es) if (e.isIntersecting) {
+      for (const a of enlaces.values()) a.classList.remove('activo');
+      enlaces.get(e.target.dataset.sec)?.classList.add('activo');
+    }
+  }, { rootMargin: '-90px 0px -70% 0px' });
+  secs.forEach((s) => ver.observe(s));
+})();
+</script>
+</body>
+</html>

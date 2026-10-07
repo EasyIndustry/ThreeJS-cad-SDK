@@ -25,6 +25,10 @@ taller.help();             // todo lo que hay
   lo único que importa three, y es opcional.
 - **Sin dependencias.** Ni de ejecución ni de build. three es *peer* y solo para el adaptador.
 
+**Referencia de la API:** [con buscador](https://easyindustry.github.io/ThreeJS-cad-SDK/)
+(`docs/index.html`) o en [Markdown](docs/API.md). Cada clase, cada método y cada valor
+exportado, generados desde las mismas tablas de `help()`: no pueden quedar atrás del código.
+
 ## Estructura
 
 ```
@@ -36,8 +40,9 @@ src/                 el núcleo: modelo, marcos, geometría, contacto. Puro.
   contact.js         contacto e intersección entre cajas orientadas
   help.js            help(): la ayuda de cada clase
 adapters/three/      el visor para three (opcional)
+docs/                la referencia de la API (generada: npm run docs)
+scripts/docs.mjs     el generador de docs/
 examples/demo.js     un bastidor con una diagonal, ensamblado, girado y repetido
-lab/index.html       consola + visor para probarlo a mano, sin build
 test/                las pruebas, en Node
 ```
 
@@ -106,10 +111,8 @@ npm test             # las pruebas, en Node (sin navegador)
 npm run typecheck    # tsc estricto
 ```
 
-Y a mano: serví la carpeta del repo con cualquier servidor estático
-(`python3 -m http.server`) y abrí `lab/index.html`. Es una consola: escribís JavaScript
-contra el SDK y la escena se actualiza. `Tab` completa, `↑` trae lo anterior, y cada clase
-tiene su `help()`.
+El testeo visual, a mano, queda del lado de cada app que vendoriza el SDK: arma su propia
+escena con `adapters/three/viewer.js` (o lee `examples/demo.js` como punto de partida).
 
 ## La idea
 
@@ -171,23 +174,10 @@ modelo: lo mira desde el costado.
 
 ## El contrato: cómo se escribe una geometría
 
-Toda clase de geometría cumple esto, y las pruebas lo hacen cumplir:
-
-1. **Un solo verbo cambia la colocación: `transform(t)`.** Mover y girar son constructores
-   de `Transform` (`Transform.translation`, `Transform.rotation`) más un atajo en la
-   instancia (`move`, `rotate`). Por eso cualquier geometría sabe moverse igual.
-2. **La definición se cambia por métodos explícitos** (`resize`, `setMaterial`, `rename`),
-   nunca escribiendo sobre algo que devolvió una consulta.
-3. **Las consultas son propiedades y devuelven valores de solo lectura.** `cubo.vertices`
-   es un array congelado de `Point3d` congelados: `cubo.vertices[0].x` se lee, no se
-   escribe. Hay una prueba que intenta escribirlos y exige que falle.
-4. **Mundo por defecto, local en espejo:** `cubo.vertices` y `cubo.local.vertices`.
-5. **Cada clase declara sus miembros con una línea de descripción** (`static members`), y
-   de ahí salen `cubo.help()` y `Point3d.help()`. Una prueba exige que cada miembro público
-   esté en la tabla y que cada entrada de la tabla exista: agregar un método sin
-   documentarlo hace caer la prueba con el nombre del método.
-6. **Sin three, sin DOM.** Una prueba lo frena si pasa.
-7. **Nada entra sin su prueba en Node**, y recién después se expone.
+Toda clase de geometría sigue un contrato fijo (un solo verbo de colocación, consultas de
+solo lectura, `help()` verificado por test, sin three ni DOM en el núcleo) que las pruebas
+hacen cumplir. Está escrito completo, junto con el criterio de qué entra a este SDK y qué
+queda en la app que lo vendoriza, en [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 Dos clases de cosas, como en Rhino:
 
@@ -212,6 +202,354 @@ de adentro sigue valiendo cuando el conjunto se mueve.
 Y para una selección suelta que no tiene que persistir, alcanza con un array:
 `Transform.apply(t, [a, b, c])`.
 
+## Unidades y tolerancias
+
+El SDK no sabe de centímetros: una medida es un número en la **unidad del documento**, que se
+elige al crearlo y viaja con él al guardarlo.
+
+```js
+const a = createWorkshop();                       // cm, si no se dice otra
+const b = createWorkshop({ units: 'mm' });        // 'mm' | 'cm' | 'm' | 'in' | 'ft'
+b.units;                                          // 'mm'
+b.tolerances;                                     // { touch: 2, penetration: 1.5 }, en mm
+createWorkshop({ units: 'in' }).tolerances;       // { touch: 0.0625, penetration: 0.046875 }, en pulgadas
+```
+
+- **Cada unidad pertenece a un sistema** (`mm`, `cm`, `m`: métrico; `in`, `ft`: imperial), y de él
+  salen los valores sugeridos.
+- **Los valores sugeridos viven en [`src/config.js`](src/config.js)**, y solo ahí (una prueba lo hace
+  cumplir). Están escritos en la unidad natural de cada sistema —2 mm y 1,5 mm; 1/16 in y 3/64 in—
+  y se llevan a la unidad del documento, así que la misma escena física da las mismas respuestas
+  en mm, en cm, en m o en pulgadas. Para otro criterio se cambia ese archivo, o se pisa desde
+  afuera con `createWorkshop({ tolerances: { touch, penetration } })`.
+- **Un documento guardado trae su unidad.** Al cargarlo (`load`), la del documento manda; uno
+  guardado antes de que se guardara la unidad era de cm, que era lo único que había.
+- **No hay conversión automática del contenido:** cambiar la unidad de un documento que ya tiene
+  piezas no es cambiar un campo, es reescalar sus números. `convertLength(valor, de, a)` está para
+  hacerlo a mano.
+- Las ayudas visuales del adaptador de three (ejes, tubos de contacto, etiquetas) se escalan con la
+  unidad.
+
+## Formas del bruto: perfiles y torneados
+
+Un bruto no tiene por qué ser una caja: puede ser un **perfil** (una sección extruida) o un
+**torneado** (un contorno que gira). La forma llena las medidas de la pieza, así que se estira con
+ella.
+
+```js
+taller.addPiece({ size: [100, 4, 4], shape: { kind: 'profile', axis: 0, section: 'rect-tube', params: { wall: 0.16 } } });
+taller.addPiece({ size: [4, 40, 4], shape: { kind: 'lathe', axis: 1, contour: [[1, 0], [1, 0.5], [0.5, 0.5], [0.5, 1]] } });
+pieza.setShape(null);   // vuelve a ser una caja
+```
+
+- **Perfil** `{ kind: 'profile', axis, section, params? }`: la sección llena los otros dos ejes y se
+  calcula con sus medidas, así que al estirar se estira y lo que es espesor (`wall`) se mantiene.
+  `params.turn` (0, 90, 180, 270) la gira. Las secciones genéricas están en `SECTIONS`:
+  `rect-tube`, `round-tube`, `round-bar`, `angle`, `channel` y `tee`.
+- **Secciones de la app:** `createWorkshop({ sections: { nombre: (params, ancho, alto) => ({ outer, holes }) } })`.
+  Una sección son contornos `{ points, smooth? }`, centrados; `smooth: true` dice que aproximan una
+  curva. El catálogo (nombres comerciales, medidas, íconos) queda en la app.
+- **Torneado** `{ kind: 'lathe', axis, contour }`: puntos `[r, y]` de 0 a 1 (del eje al borde, de
+  una punta a la otra), con `y` que no decrece.
+
+**Lo que se consulta es la forma real.** En una pieza con perfil, torneado u operaciones,
+`vertices`, `edges` y `faces` son los de su forma: un caño cuadrado de 4 × 4 tiene 16 vértices.
+Una arista sobre una superficie curva no se ofrece (no sirve para enganchar), y una cara plana
+trae sus agujeros (`face.holes`). La caja (`boundingBox`), `dims` y el despiece siguen siendo los
+del bruto.
+
+**Contacto exacto.** El contacto y el choque se calculan con la caja de cada pieza, que para una
+tabla es exacto. Con `{ exact: true }` se usa la forma real:
+
+```js
+barra.contactsWith(tabla, { exact: true });   // una línea, no una cara
+a.intersects(b, { exact: true });              // dos barras en L que solo encima sus cajas: false
+taller.contacts({ exact: true });
+```
+
+La forma real se arma con pedazos convexos (`src/convex.js`), así que el contacto exacto no
+necesita kernel. Un contacto contra una superficie curva es la línea donde apoya.
+
+## Estirar un conjunto
+
+Como el STRETCH de los CAD: se corta el conjunto con un plano, lo que lo cruza se estira, lo que
+está del lado que se arrastra se mueve y lo del otro lado se queda.
+
+```js
+mesa.stretchPlanes('x');                                   // [{ plane, gap }]: el hueco más ancho primero
+const plan = mesa.stretchPlan({ axis: 'x', side: 1, delta: 20, locked: patas });   // previsualizar
+plan.pieces;          // [{ part, action: 'stretch' | 'move' | 'stay', axis?, reason? }]
+plan.min;             // hasta dónde se puede achicar; plan.limited si se pidió más
+mesa.stretch({ axis: 'x', side: 1, delta: 20 });           // hacerlo, en un solo paso de deshacer
+```
+
+- **En el marco del ensamble:** `axis` y `plane` son del ensamble, así que la misma mesa girada
+  se estira igual.
+- **Planos de corte:** el medio de cada hueco entre bordes, el más ancho primero (entre patas,
+  entre estantes) y, si empatan, el más centrado. Si no se da `plane`, se usa el primero.
+- **Lo que no se estira** —lo `locked` (patas torneadas, perfiles, frentes), las instancias y una
+  pieza que cruza el plano **en diagonal**— se mueve entero con el lado donde está su centro; el
+  plan dice por qué (`reason`).
+- **El límite al achicar:** ninguna pieza estirada queda más corta que `minLength`
+  (`taller.tolerances.minLength`: 10 mm, o 3/8 in) y lo que se mueve no pasa a lo que se queda.
+- Una pieza estirada cambia su medida a lo largo del eje; sus operaciones, que van normalizadas,
+  se reaplican.
+
+## Colocación
+
+Lo que hace cómodo armar a mano. Son funciones que **proponen**: devuelven una traslación (y qué
+la causó) y no tocan nada; la app decide si la aplica, por ejemplo mientras arrastra.
+
+```js
+const s = taller.snap(pieza);                // imán: { transform, snaps: [{ normal, delta, other, kind }] } o null
+pieza.transform(s.transform);
+taller.snap(pieza, { distance: 1, grid: 1 }); // a otra distancia, y lo que no pegó a nada, a la grilla
+taller.pushOut(pieza, { floor: 0 });          // si está metida en otra: { transform, from } que la saca
+taller.drop([pata1, pata2], { floor: 0 });    // apoyar: { transform, distance, on }
+taller.alignmentGuides(pieza);                // con qué planos quedó alineada, los más cercanos primero
+Transform.orient(caraA, caraB, { flip });     // la cara A sobre la B, enfrentadas y con los centros juntos
+```
+
+- Todas andan con piezas giradas (trabajan con cajas orientadas) y reciben una pieza o un
+  **grupo** que se mueve junto.
+- **Imán:** pega las caras de lo que se mueve a las caras paralelas de piezas cercanas,
+  enfrentadas (`kind: 'face'`: quedan tocándose) o del mismo lado (`'flush'`: quedan al ras). La
+  distancia es `taller.tolerances.snap` (25 mm, o 1 in) si no se pasa otra. `delta` es cuánto
+  moverse a lo largo de `normal`.
+- **Sacar del choque:** por el lado de menor penetración, iterando si al salir de una entra en
+  otra; con `floor` (y `up`, `'y'` por defecto) nunca queda por debajo del piso.
+- **Apoyar:** barre lo que se mueve hacia abajo (contra `up`) hasta el primer contacto o el piso.
+- La grilla, el piso y la dirección de arriba son decisiones de la app: van como parámetros.
+
+## Agarre
+
+Lo que necesita un imán: qué rasgo de una pieza está debajo del cursor, y qué pieza corta un rayo.
+
+```js
+const g = pieza.closest(punto);         // { kind: 'vertex' | 'edge' | 'face', piece, point, edge, face, key } o null
+g.point;                                // el punto llevado al rasgo (a la arista: solo corre a lo largo)
+sameFeature(g, pieza.closest(otro));    // ¿sigue sobre lo mismo? (para no redibujar)
+taller.pick({ origin, direction });     // { part, point, distance, normal } o null, sin three
+taller.pick(rayo, { exclude: [arrastrada] });
+```
+
+- Se calcula en el marco de cada pieza: anda igual con la pieza girada o adentro de un ensamble
+  girado. Usa los rasgos reales (los de una caja, o los de su forma): no ofrece aristas sobre una
+  superficie curva.
+- Se prefiere un vértice a una arista y una arista a una cara.
+- **La franja es por eje:** `taller.tolerances.grab` (10 mm, o 3/8 in), pero nunca más que
+  `GRAB_RATIO` (0,3) del largo de ese eje. En una tabla de 1,8 cm, la franja del canto es de
+  0,54: no se come el espesor. Se puede pasar otra: `closest(p, { tolerance })`.
+- `pick` corta contra la forma real (un rayo por la esquina de la caja de una barra redonda no
+  la toca), con la caja de cada pieza como filtro rápido.
+
+## Bruto y operaciones
+
+**Una pieza es su bruto** —lo que se compra y se corta: sus medidas, la forma de su bruto si no
+es una caja— **más una lista ordenada de operaciones.** Las operaciones son datos y se guardan
+con el documento; la forma que resulta es un cálculo y no se guarda.
+
+```js
+const p = taller.addPiece({ size: [60, 4.5, 4.5] });
+p.addOperation({ kind: 'cut', axis: 2, outline: [[0, 0], [1, 0], [1, 0.5], [0, 1]] });
+p.addOperation({ kind: 'hole', axis: 0, side: 1, at: [0.5, 0.5], diameter: 0.8, depth: 3 });
+p.stock;          // { size, shape }: el bruto; las operaciones no lo cambian
+p.operations;     // [{ id: 'O-1', kind: 'cut', … }, { id: 'O-2', kind: 'hole', … }]
+p.local.solid;    // la forma que resulta (Mesh), en el marco de la pieza
+p.solid;          // la misma, en el mundo
+p.removeOperation('O-2');   // vuelve exactamente a la forma de antes
+```
+
+| operación | qué hace |
+|---|---|
+| `{ kind: 'cut', axis, outline }` | la pieza se queda con lo que cae adentro del contorno, que la atraviesa a lo largo de `axis` (0, 1, 2: x, y, z locales). `outline`: puntos `[u, v]` de 0 a 1 sobre los otros dos ejes, en orden |
+| `{ kind: 'hole', axis, side, at, diameter, depth? }` | un agujero que entra por la cara `side` (1 o -1) de `axis`, en `at = [u, v]` de 0 a 1 sobre esa cara; sin `depth`, pasante |
+| `{ kind: 'trim', against, mode? }` | la pieza pierde el volumen de la pieza `against` donde se cruzan: el de su caja (`'box'`, por defecto) o el de su forma (`'shape'`) |
+
+- **Las operaciones sobreviven a estirar:** las posiciones van normalizadas sobre el bruto, así
+  que `resize` las reaplica. Lo que no se estira (un diámetro, una profundidad) va en la unidad
+  del documento.
+- **`dims`, la caja y el contacto son los del bruto.** Para despiezar, presupuestar o encastrar,
+  manda lo que se compra.
+- **El SDK calcula la forma solo**, sin dependencias: la parte en pedazos convexos y arma la
+  malla con sus caras de afuera. Para dibujar con una malla más limpia se puede inyectar un
+  kernel (three-bvh-csg, manifold o el que sea), y `src/` sigue sin depender de ninguno:
+
+  ```js
+  const taller = createWorkshop({ kernel: { intersect(a, b) { … }, subtract(a, b) { … } } });
+  ```
+
+  Recibe y devuelve mallas (`{ positions, indices }`) en el marco de la pieza.
+- **Recortes:** dependen de dónde está la otra pieza *respecto de esta*. Mover la otra los
+  recalcula (y el visor rehace la malla); mover o girar el ensamble que contiene a las dos, no. Si
+  se borra la otra, el recorte se quita en el mismo paso (deshacer devuelve las dos). En una
+  instancia, el recorte es contra la pieza de la misma instancia. Un par donde alguna pieza tiene
+  recortes se mira con su forma real en el contacto y el choque (`exact: false` fuerza las cajas):
+  dos largueros cruzados, después de recortar uno contra el otro, se tocan y no chocan.
+- **La forma se cachea** mientras no cambie lo que la define (medidas, forma del bruto,
+  operaciones): mover o renombrar la pieza no la recalcula, las instancias comparten la de su
+  fuente y deshacer vuelve a encontrar la de antes.
+- El adaptador de three dibuja la forma que resulta. Si no se puede calcular, dibuja la caja y el
+  motivo queda en `mesh.geometry.userData.solidError`.
+
+## Instancias y matrices
+
+Una **instancia** es la misma pieza o el mismo ensamble colocado otra vez. Es lo que en Rhino
+es un *Block* (y no una copia): guarda solo de quién es copia y su marco, y todo lo demás —
+medidas, forma, material, lo de adentro de un ensamble — se lee de la fuente cada vez. Editar
+la fuente cambia todas sus instancias, sin hacer nada más.
+
+```js
+const modulo = taller.assemble([base, tapa, lateral1, lateral2], { name: 'Módulo' });
+const copias = taller.array(modulo, { type: 'linear', count: 4, direction: [0, 1, 0], distance: 120 });
+tapa.resize([60, 2, 18]);       // cambian los cuatro
+copias[0].source;               // el módulo
+modulo.instances;               // las tres copias
+copias[0].detach();             // ya no sigue a la fuente: pasa a ser un ensamble de verdad
+```
+
+- **`duplicate()`** da una copia independiente; **`taller.instantiate(parte)`** da una que sigue
+  a la original. Las dos tienen sentido: una es "hacé otro igual", la otra "es el mismo".
+- **Lo de adentro de una instancia se lee, no se cambia por separado.** Sus piezas aparecen en
+  `vertices`, `pieces` y `taller.contacts()` como piezas de verdad, con un id de camino
+  (`I-1/P-2`: la pieza `P-2` de la fuente, tal como queda dentro de `I-1`). Moverlas o
+  cambiarlas por separado falla con un mensaje que dice a qué instancia pertenecen: se cambia
+  la fuente, o se suelta la instancia.
+- **`detach()` conserva el id** (la app guarda ids) y el lugar. Lo de adentro pasa a ser partes
+  nuevas, con su propio id.
+- **No se borra ni se deshace la fuente de una instancia**: antes se suelta o se borra la
+  instancia, y el error dice cuáles son.
+- **Duplicar un conjunto que tiene una fuente y sus instancias** (un ensamble con un módulo y tres
+  copias) da un conjunto que se basta a sí mismo: las copias siguen al módulo copiado, no al de
+  afuera.
+- Un documento guardado con instancias lo lee esta versión y las siguientes (`version: 2`); uno
+  guardado antes se carga igual.
+
+### Matrices
+
+`taller.array(parte, spec)` repite una parte creando instancias, y `arrayTransforms(spec)` es
+la misma cuenta sin tocar el documento (devuelve las transformaciones, en el mundo). `count`
+cuenta a la original: con `count: 4` se crean tres instancias.
+
+| `type` | qué hace |
+|---|---|
+| `'linear'` | en una dirección: `{ count, direction, distance, fit? }` |
+| `'area'` | en dos: `{ count, count2, direction, direction2, distance, distance2, fit? }` |
+| `'polar'` | alrededor de un eje: `{ count, axis?, center?, angle?, fit?, orient? }` |
+
+- **`fit: 'span'`** (por defecto): `distance` es el largo total, de la primera a la última, y
+  el paso se reparte. **`fit: 'step'`**: `distance` es la separación entre dos consecutivas, y
+  sumar copias alarga la fila. Qué manda, la medida total o el paso, lo decide quien llama.
+- **Polar:** un barrido de 360° no repite la primera copia (4 copias = cada 90°, no cada 120°);
+  uno menor incluye las dos puntas. Con `fit: 'step'`, `angle` es lo que gira cada paso.
+  `orient: true` (por defecto) gira cada copia con el barrido; `orient: false` la deja paralela
+  a la original y solo cambia de lugar.
+- Las matrices **crean** instancias y listo: no queda un objeto "matriz" que se re-evalúe. Si la
+  cantidad depende de otra cosa (un volumen que se estira), quien llama vuelve a calcularla.
+
+## Relaciones: juntas, uniones y vínculos
+
+Una relación vive en el documento, entre partes guardadas: entra en el deshacer, se guarda con
+`toJSON()`, se limpia sola si se borra una de sus partes (en el mismo paso) y se copia con lo que
+se copia (`duplicate`, `detach`). Las de adentro de la fuente de una instancia se ven en la
+instancia con ids de camino (`I-1/R-2`): se leen como cualquier otra, y se cambian en la fuente.
+Cada una tiene `kind`, `parts`, `broken` (null si vale; si no, por qué) y `meta` (lo que la app
+quiera guardar con ella: su tipo comercial, un nombre; el SDK no lo lee). Avisan por `on` con
+`'relation'`, `'relation-broken'` y `'relation-remove'`.
+
+```js
+// una bisagra: el canto lo propone el SDK, en el marco de la base (anda con el mueble girado)
+const bisagra = taller.addJoint(taller.hingeCandidates(puerta, lateral)[0]);
+bisagra.at(90).placements;      // { [id de pieza]: Transform } con la puerta abierta: no cambia nada
+
+// una corredera: la dirección en que el cajón sale sin chocar, limitada a su largo
+const corredera = taller.addJoint(taller.slideCandidates(cajon, cuerpo)[0]);
+
+// una unión: 2 puntos repartidos en el contacto, con un agujero en cada pieza
+const union = taller.addFixing({ a: lateral, b: estante, count: 2,
+  holes: { a: { diameter: 0.5 }, b: { diameter: 0.4, depth: 4 } }, meta: { tipo: 'tornillo 4x40' } });
+
+// un estante entre dos laterales: mover un lateral lo estira
+taller.addLink({ base: izq, face: { axis: 'x', side: 1 }, moving: estante });
+taller.addLink({ base: der, face: { axis: 'x', side: -1 }, moving: estante });
+```
+
+- **Juntas** (`addJoint({ type: 'revolute' | 'prismatic', moving, base, axis, limits? })`). El eje
+  vive en el marco de la base. El documento guarda la junta cerrada; `joint.at(value)` (grados o
+  unidades del documento, limitado a `limits`) da dónde queda cada pieza de la parte móvil, sin
+  tocar el modelo: es para animar. Una corredera sin límites va de 0 al largo de la móvil.
+  `hingeCandidates` propone los cantos de la cara de la móvil que mira a la base, con el sentido
+  que la abre hacia afuera (primero los más cerca de la base, y los más largos); `slideCandidates`,
+  las direcciones en que corre sin barrer ninguna pieza de la base.
+- **Uniones** (`addFixing({ a, b, points? | count?, holes?, policy? })`). `a` es por donde entra y
+  `b`, donde agarra. Van en el contacto de cara entre las dos: sus puntos son `[u, v]` de 0 a 1
+  sobre el parche de contacto (o se reparten solos con `count`), así siguen en su lugar al estirar
+  o girar. `fixing.points` da cada punto en el mundo con lo que atraviesa de cada pieza en la
+  dirección de entrada (`pieza.thicknessAt(punto, dirección)`: la pared, si es un caño). Los
+  agujeros son operaciones `hole` de las dos piezas (sin `depth`, pasante) y se mueven con la unión.
+  Si las piezas se separan, la unión queda rota (`policy: 'break'`) o se borra con sus agujeros
+  (`'remove'`). Eso se mira al cerrar el paso: adentro de una transacción, un estado a medio hacer
+  no la rompe.
+- **Vínculos** (`addLink({ base, face, moving, gap? })`). No es un solver: ancla la punta de
+  `moving` que mira a la cara `face` de `base`, a `gap` de ella (hacia afuera de la base; 0 al ras;
+  negativo, se mete; si no se dice, la de ahora). Con una punta anclada sobre un eje, la pieza se
+  mueve con la base; con las dos, se estira entre las dos caras. Se resuelve después de cada
+  operación, en cascada (la base antes que lo que la sigue) y en el mismo paso de deshacer. Se
+  mide con la normal de la cara, así que anda igual con el mueble girado. `validateLink(spec)`
+  dice si se puede crear: `'over-constrained'` (una punta ya anclada, o tres), `'cycle'`,
+  `'not-parallel'`. Con una matriz, la fuente manda y las copias siguen. Si dejaría una pieza por
+  debajo de `tolerances.minLength`, la operación que lo causó falla entera.
+- Quedan en la app: el catálogo de bisagras, correderas y herrajes, sus medidas comerciales,
+  cuántos poner y los nombres.
+
+## Despiece
+
+```js
+taller.cutList();   // [{ stock, material, length, width, thickness, count, ids, fixings }, …]
+```
+
+Una fila por cada grupo de piezas idénticas: mismo bruto (`stock`: `{ kind: 'box' }` o la forma
+del perfil o del torneado), mismo material y mismo largo × ancho × espesor (los de `dims`: los
+ejes de la pieza, también los forzados con `axes`). Las piezas de adentro de las instancias suman
+a la misma fila. Una pieza con operaciones va por su bruto, que es lo que se compra. `fixings` son
+las uniones de las piezas de la fila, para los herrajes. `groupBy: 'none'` da una fila por pieza, y
+una función separa las filas por lo que devuelva. Corre en Node. Precios, desperdicio, cantos y
+mano de obra son de la app.
+
+## Deshacer y rehacer
+
+El historial vive en el documento, porque es el documento el que sabe qué cambió.
+
+```js
+taller.undo();  taller.redo();          // false si no había nada
+taller.canUndo; taller.canRedo;         // para habilitar botones
+
+// un gesto son muchos cambios: que valgan un solo paso
+taller.begin();                         // pointerdown
+pieza.move(delta);                      // pointermove, cien veces
+taller.commit();                        // pointerup   (o taller.rollback() con Esc)
+
+taller.transaction(() => { a.move(v); b.rotate(90, 'y'); });   // lo mismo, en una función
+```
+
+- **Cada operación es un paso**, y `begin()`/`commit()` (o `transaction(fn)`) agrupan varias en
+  uno. Se anidan: vale la de afuera. `begin`/`commit` existen porque un arrastre cruza varios
+  eventos y no entra en una función.
+- **Nada queda a medias.** Una operación que falla deja el documento como estaba antes de ella;
+  `transaction(fn)` vuelve atrás entera si `fn` tira, y `rollback()` cancela la transacción
+  abierta.
+- **Deshacer avisa como cualquier otro cambio** (`on`: `'undo'`, `'redo'`, `'rollback'`, con los ids
+  que cambiaron), así el adaptador de three se entera solo.
+- **Una parte borrada y recuperada vuelve con el mismo id**, y el handle que se tenía de ella
+  vuelve a servir.
+- `taller.array(...)` es un solo paso. `Transform.apply(t, [a, b, c])` mueve cada parte por
+  separado: para que una selección sea un solo paso, va adentro de `taller.transaction`.
+- El historial guarda hasta `historyLimit` pasos (100; `createWorkshop({ historyLimit })`, 0 para
+  no guardar nada). `load()`, `clear()` y `clearHistory()` lo borran: un documento cargado no
+  tiene pasado.
+- Lo guardado es inmutable (cada cambio reemplaza el registro), así que un paso no copia el
+  documento: comparte todo lo que no cambió.
+
 ## La API
 
 ```js
@@ -226,14 +564,15 @@ const e = taller.assemble([cubo, otro], { name: 'Marco' });
 e.duplicate().move([0, 0, 80]);
 ```
 
-Medidas en cm, ángulos en grados. Lo completo de cada clase está en su `help()`, que es la
-fuente de verdad (y está verificada): `taller.help()`, `Piece.help()`, `Assembly.help()`,
+Las medidas son números en la unidad del documento (ver [Unidades y tolerancias](#unidades-y-tolerancias)); los ángulos, en grados. Lo completo está en la
+[referencia de la API](https://easyindustry.github.io/ThreeJS-cad-SDK/) y, desde el código, en
+el `help()` de cada clase, que es la fuente de verdad (y está verificada): `taller.help()`, `Piece.help()`, `Assembly.help()`,
 `Point3d.help()`, `Vector3d.help()`, `Line.help()`, `BoundingBox.help()`, `Face.help()`,
-`Transform.help()`.
+`Transform.help()`, `Joint.help()`, `Fixing.help()`, `Link.help()`.
 
 ### Contacto e intersección
 
-Tres preguntas distintas, porque en carpintería son tres cosas distintas:
+Tres preguntas distintas, porque en un ensamble son tres cosas distintas:
 
 | | |
 |---|---|
@@ -244,17 +583,19 @@ Tres preguntas distintas, porque en carpintería son tres cosas distintas:
 | `taller.contacts()` · `taller.collisions()` | todos, en el documento |
 | `e.contactsWith(e)` | un ensamble contra sí mismo: sus uniones internas |
 
-Las tolerancias por defecto están pensadas para carpintería: se tocan a **0,2 cm** o menos
-(`TOUCH`) y chocan si se meten más de **0,15 cm** (`PEN`). Las dos se pueden pedir:
-`a.touches(b, { tolerance: 0.05 })`.
+Se tocan si están a `taller.tolerances.touch` o menos, y chocan si se meten más de
+`taller.tolerances.penetration`. Esos valores no están escritos en el código: salen de
+[`src/config.js`](src/config.js), según la unidad del documento (ver más abajo). Se pueden pisar
+para una pregunta (`a.touches(b, { tolerance: 0.05 })`, en la unidad del documento) o para todo el
+taller (`createWorkshop({ tolerances: { touch: 0.05 } })`).
 
 Funciona con piezas giradas como estén: son cajas orientadas, no alineadas al mundo (que
 para una pieza girada son más grandes que la pieza). El teorema de los ejes separadores (los
 15 ejes) dice si chocan y cuánto, y el recorte de polígonos dice dónde.
 
-En el laboratorio, el botón **Contactos** (o `cad.show.contacts()`) pinta de verde donde se
-tocan y de rojo donde se meten. La demo tiene un choque que nadie había visto cuando se
-escribió: la diagonal de 80 cm no entra entre los largueros y se mete 2,1 cm en cada uno.
+El adaptador de three, con `vista.show.contacts(true)`, pinta de verde donde se tocan y de rojo
+donde se meten. La demo (`examples/demo.js`) tiene un choque que nadie había visto cuando se
+escribió: la diagonal de 80 no entra entre los largueros y se mete 2,1 en cada uno.
 
 ### Por qué la pieza se llama `Piece` y no `Box`
 
@@ -264,36 +605,29 @@ en el CAD: no es una caja. Lo que sí es, por ahora, es lo que se *consulta* de 
 
 ## Cómo se agrega algo
 
-La regla: **una feature entra primero al modelo y después a la API.**
-
-1. En `src/model.js` (o un módulo de `src/`), con su prueba en `test/sdk.test.mjs`, en Node.
-2. Expuesta en `src/index.js` o `src/geometry.js`, con su línea en la tabla de `help()`.
-3. Si se dibuja distinto, en `adapters/three/viewer.js` — que no decide nada: espeja.
-4. A mano, desde la consola de `lab/index.html`.
-
-El tipado se verifica con `npm run typecheck`, en modo estricto.
-Los tipos van en JSDoc: los archivos siguen siendo `.js` y no hay paso de build.
-
-Nada de `src/` importa three, el DOM ni algo de afuera de `src/`, y hay una prueba que lo
-frena si eso cambia: el núcleo lo puede usar un servidor.
+La regla: **una feature entra primero al modelo y después a la API**, y antes de escribir
+nada, el criterio de qué es agnóstico (ver `CONTRIBUTING.md`). El flujo completo, la
+política de compatibilidad hacia atrás y el proceso de release están en
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Lo que todavía no está
 
 Dicho para que nadie lo dé por hecho:
 
-- **La geometría consultable de una pieza es su caja.** La forma (perfil, torneado, corte del
-  CAD) viaja en la definición y el visor la dibuja con el mismo constructor que el taller,
-  pero `vertices`, `edges` y `faces` devuelven los de la caja. Los de la forma real van
-  después, también en el marco local.
+- **Las curvas son polígonos.** Un círculo se aproxima con 32 lados (`CIRCLE_SIDES`), así que el
+  volumen de una barra redonda es el de un prisma de 32 lados, y un torneado es una pila de
+  troncos de 32 lados.
+- **Un torneado va de una punta a la otra:** su contorno no puede volver para atrás en `y` (no
+  hay socavados).
 - **Transformaciones rígidas solamente.** Escalar una pieza es cambiarle las medidas
   (`resize`), no una transformación; espejar va a necesitar saber de qué mano es cada
   forma. Las dos llegan como constructores nuevos de `Transform` cuando hagan falta.
-- **El contacto se calcula con la caja de la pieza.** Para una tabla es exacto; para una pata
-  torneada o un caño, es el contacto de su caja. Cuando las piezas tengan su geometría real,
-  el contacto la va a usar.
-- **No hay fijaciones, juntas de movimiento, matrices, vínculos ni recortes.** Son relaciones
-  entre partes, y cada una va a entrar siguiendo la regla de arriba.
-- **No hay deshacer.**
+- **El contacto, por defecto, es el de la caja de cada pieza** (rápido, y exacto para una tabla).
+  El de la forma real se pide con `{ exact: true }`. Un contacto de cara entre dos piezas partidas
+  en convexos puede salir en varios pedazos (uno por pedazo que apoya).
+- **Una unión va en un contacto de cara** entre caras planas alineadas a los ejes de cada pieza
+  (los agujeros son operaciones, que entran por una de esas caras). Un vínculo ancla piezas
+  (no ensambles) por sus puntas.
 
 ## Licencia
 

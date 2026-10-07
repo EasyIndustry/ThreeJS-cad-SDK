@@ -19,15 +19,20 @@
 // La forma y el material de cada pieza los decide la app, si quiere, con dos ganchos:
 //   geometryFor(piece) → BufferGeometry en el marco LOCAL de la pieza, centrada en su origen
 //   materialFor(piece) → Material
-// Por defecto: una caja de sus medidas y un color por material.
+// Por defecto: la forma que resulta de la pieza (su bruto —caja, perfil o torneado— con sus
+// operaciones) y un gris neutro para todas, sea cual sea su
+// `material`. Si la forma no se puede calcular (p. ej. hace falta un kernel que la app no
+// pasó), se dibuja la caja y el motivo queda en `mesh.geometry.userData.solidError`. El adaptador no conoce catálogos de materiales de ninguna app: eso es de
+// `materialFor`.
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { toColumns4 } from '../../src/frame.js';
+import { convertLength } from '../../src/units.js';
 
 /** @typedef {ReturnType<typeof import('../../src/index.js').createWorkshop>} Workshop */
 /** @typedef {import('../../src/model.js').PieceDef} PieceDef */
 
-const COLORES = { pino: '#d9b27a', roble: '#b88a58', nogal: '#7c5337', mdf: '#c7b597', 'melamina-blanca': '#ecebe5', guatambu: '#e3cf9d' };
+const GRIS_NEUTRO = '#9a9a92';
 
 /**
  * @param {Workshop} workshop
@@ -40,9 +45,26 @@ const COLORES = { pino: '#d9b27a', roble: '#b88a58', nogal: '#7c5337', mdf: '#c7
  */
 export function createThreeView(workshop, { scene, geometryFor, materialFor, colors = {} }) {
   const model = workshop.model;
+  // los tamaños de las ayudas (ejes, tubos, etiquetas) están pensados en cm: se llevan a la unidad del documento
+  const u = convertLength(1, 'cm', model.units);
   const col = { edge: '#3b2a1e', highlight: '#d6461f', contact: '#2e9a5c', collision: '#d6461f', ...colors };
-  const geo = geometryFor || ((/** @type {PieceDef} */ p) => new THREE.BoxGeometry(p.size[0], p.size[1], p.size[2]));
-  const mat = materialFor || ((/** @type {PieceDef} */ p) => new THREE.MeshStandardMaterial({ color: COLORES[/** @type {keyof typeof COLORES} */ (p.material)] || COLORES.pino, roughness: 0.8 }));
+  const caja = (/** @type {PieceDef} */ p) => new THREE.BoxGeometry(p.size[0], p.size[1], p.size[2]);
+  const geo = geometryFor || ((/** @type {PieceDef} */ p) => {
+    if (!p.operations?.length && !p.shape) return caja(p);
+    try {
+      const m = workshop.part(p.id).local.solid;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(m.positions, 3));
+      g.setIndex([...m.indices]);
+      g.computeVertexNormals();
+      return g;
+    } catch (e) {
+      const g = caja(p);
+      g.userData.solidError = e instanceof Error ? e.message : String(e);
+      return g;
+    }
+  });
+  const mat = materialFor || (() => new THREE.MeshStandardMaterial({ color: GRIS_NEUTRO, roughness: 0.8 }));
 
   const root = new THREE.Group();
   root.name = 'threejs-cad-sdk';
@@ -51,7 +73,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
   root.add(piezas, capas);
   scene.add(root);
 
-  /** @type {Map<string, { mesh: THREE.Mesh, edges: THREE.LineSegments, key: string }>} */
+  /** @type {Map<string, { mesh: THREE.Mesh, edges: THREE.LineSegments, key: string, forma: unknown }>} */
   const mallas = new Map();
   const ver = { axes: false, boxes: false, labels: false, contacts: false };
   /** @type {Set<string>} */
@@ -68,12 +90,15 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
 
   function sync() {
     const vivas = new Set();
-    for (const p of model.parts.values()) {
-      if (p.kind !== 'piece') continue;
+    // las piezas de adentro de una instancia se dibujan como cualquier otra, con su id de camino
+    for (const p of model.allPieces()) {
       vivas.add(p.id);
-      const key = JSON.stringify([p.size, p.shape, p.material]);
+      const key = JSON.stringify([p.size, p.shape, p.material, p.operations]);
+      // la forma que resulta puede cambiar sin que cambie la definición (un recorte, si se mueve la otra pieza)
+      let forma = null;
+      if (!geometryFor && (p.shape || p.operations?.length)) { try { forma = workshop.part(p.id).local.solid; } catch { forma = null; } }
       let e = mallas.get(p.id);
-      if (!e || e.key !== key) {
+      if (!e || e.key !== key || e.forma !== forma) {
         if (e) tirar(e);
         const mesh = new THREE.Mesh(geo(p), mat(p));
         mesh.matrixAutoUpdate = false;
@@ -82,7 +107,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
         const edges = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, 25), new THREE.LineBasicMaterial({ transparent: true, opacity: 0.6 }));
         mesh.add(edges);
         piezas.add(mesh);
-        e = { mesh, edges, key };
+        e = { mesh, edges, key, forma };
         mallas.set(p.id, e);
       }
       e.mesh.matrix.fromArray(toColumns4(model.worldFrame(p.id)));
@@ -101,13 +126,14 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
         if (x instanceof THREE.Mesh || x instanceof THREE.LineSegments) x.geometry.dispose();
       });
     }
-    for (const p of model.parts.values()) {
-      const caja = model.box(p.id, 'world');
+    for (const id of model.parts.keys()) {
+      const p = model.get(id);
+      const caja = model.box(id, 'world');
       const ensamble = p.kind === 'assembly';
       if (ver.axes) {
-        const ejes = new THREE.AxesHelper(Math.max(8, Math.min(40, Math.max(...caja.size) * 0.35)));
+        const ejes = new THREE.AxesHelper(Math.max(8 * u, Math.min(40 * u, Math.max(...caja.size) * 0.35)));
         ejes.matrixAutoUpdate = false;
-        ejes.matrix.fromArray(toColumns4(model.worldFrame(p.id)));
+        ejes.matrix.fromArray(toColumns4(model.worldFrame(id)));
         capas.add(ejes);
       }
       if (ver.boxes) {
@@ -116,9 +142,9 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
       if (ver.labels) {
         const div = document.createElement('div');
         div.className = ensamble ? 'cad-label cad-label--assembly' : 'cad-label';
-        div.textContent = `${p.id} · ${p.name}`;
+        div.textContent = `${id} · ${p.name}`;
         const o = new CSS2DObject(div);
-        o.position.set(caja.center[0], ensamble ? caja.max[1] + 4 : caja.center[1], caja.center[2]);
+        o.position.set(caja.center[0], ensamble ? caja.max[1] + 4 * u : caja.center[1], caja.center[2]);
         capas.add(o);
       }
     }
@@ -147,7 +173,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
   /** @param {{ x: number, y: number, z: number }} a @param {{ x: number, y: number, z: number }} b @param {string} color */
   function tubo(a, b, color) {
     const A = new THREE.Vector3(a.x, a.y, a.z), B = new THREE.Vector3(b.x, b.y, b.z);
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, A.distanceTo(B), 12), new THREE.MeshBasicMaterial({ color, depthTest: false }));
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.5 * u, 0.5 * u, A.distanceTo(B), 12), new THREE.MeshBasicMaterial({ color, depthTest: false }));
     m.position.copy(A).add(B).multiplyScalar(0.5);
     m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), B.clone().sub(A).normalize());
     m.renderOrder = 10;
@@ -155,7 +181,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
   }
   /** @param {{ x: number, y: number, z: number }} a @param {string} color */
   function punto(a, color) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color, depthTest: false }));
+    const m = new THREE.Mesh(new THREE.SphereGeometry(u, 16, 12), new THREE.MeshBasicMaterial({ color, depthTest: false }));
     m.position.set(a.x, a.y, a.z);
     m.renderOrder = 10;
     return m;
@@ -175,7 +201,7 @@ export function createThreeView(workshop, { scene, geometryFor, materialFor, col
   return {
     /** El grupo que el adaptador cuelga en la escena. */
     group: root,
-    /** Las mallas por id de pieza (para elegir con un raycaster, por ejemplo). */
+    /** Las mallas por id de pieza (para elegir con un raycaster, por ejemplo). Las de adentro de una instancia llevan su id de camino (`I-1/P-2`). */
     meshes: mallas,
     /** Sincroniza ya, sin esperar al próximo cuadro. */
     sync,
