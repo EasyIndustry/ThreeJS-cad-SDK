@@ -1568,6 +1568,20 @@ test('larguero girado 45°: un punto cerca de su esquina da el vértice, exacto'
   assert.equal(g.piece, l.id);
 });
 
+test('closest con kinds: sin vértices pedidos, una esquina da su arista; sin aristas, su cara', () => {
+  const t = createWorkshop();
+  const tabla = t.addPiece({ size: [90, 1.8, 50], center: [0, 0.9, 0] });
+  const esquina = [44.9, 1.9, 24.9];   // cerca de la esquina, un pelo adentro
+  assert.equal(tabla.closest(esquina).kind, 'vertex');
+  assert.equal(tabla.closest(esquina, { kinds: ['vertex', 'edge', 'face'] }).kind, 'vertex', 'el mismo orden de siempre');
+  assert.equal(tabla.closest(esquina, { kinds: ['edge', 'face'] }).kind, 'edge');
+  assert.equal(tabla.closest(esquina, { kinds: ['face'] }).kind, 'face');
+  assert.equal(tabla.closest(esquina, { kinds: ['vertex'] }).kind, 'vertex');
+  assert.equal(tabla.closest([0, 1.8, 22], { kinds: ['vertex', 'edge'] }), null, 'en el medio de una cara, sin caras: nada');
+  assert.throws(() => tabla.closest(esquina, { kinds: [] }), /kinds inválido/);
+  assert.throws(() => tabla.closest(esquina, { kinds: ['punto'] }), /kinds inválido/);
+});
+
 test('tabla de 1,8: a 0,5 del canto largo es arista; a 3, cara; en el medio del canto, cara', () => {
   const t = createWorkshop();
   const tabla = t.addPiece({ size: [90, 1.8, 50], center: [0, 0.9, 0] }); // arriba en y = 1,8; canto largo en z = 25
@@ -1661,6 +1675,22 @@ test('una pieza arrastrada a 2 cm del canto de otra queda al ras (el imán propo
   assert.ok(p.touches(base) && !p.intersects(base));
   assert.equal(t.snap(p, { distance: 0.5 }).snaps.length, 2, 'ya está pegada: las mismas caras, a 0');
   assert.equal(t.snap(t.addPiece({ size: [1, 1, 1], center: [500, 500, 500] })), null, 'lejos de todo: nada');
+});
+
+test('snap con axis: solo corre a lo largo de ese eje, y no corrige las otras direcciones', () => {
+  const t = createWorkshop();
+  const base = t.addPiece({ size: [60, 2, 40], center: [30, 1, 0] });
+  const p = t.addPiece({ size: [10, 2, 10], center: [67, 1.7, 3.3] });   // a 2 de la base en x, 0,7 más arriba en y
+  const libre = t.snap(p);
+  assert.ok(libre.transform.translationVector.y !== 0 || libre.snaps.length > 1, 'sin axis también corrige y');
+  const x = t.snap(p, { axis: 'x' });
+  assert.equal(x.snaps.length, 1);
+  assert.equal(x.snaps[0].other.id, base.id);
+  cerca(x.transform.translationVector.toArray(), [-2, 0, 0], 1e-9, 'solo x');
+  cerca(t.snap(p, { axis: [-1, 0, 0] }).transform.translationVector.toArray(), [-2, 0, 0], 1e-9, 'el sentido del eje no importa');
+  assert.equal(t.snap(p, { axis: 'z' }), null, 'por z no hay nada cerca: nada');
+  cerca(t.snap(p, { axis: 'z', grid: 1 }).transform.translationVector.toArray(), [0, 0, -0.3], 1e-9, 'la grilla, solo sobre el eje');
+  assert.throws(() => t.snap(p, { axis: 'w' }), /inválido/);
 });
 
 test('el imán con grilla: en los ejes que no pegó a nada, la esquina cae sobre la grilla', () => {
@@ -1927,6 +1957,43 @@ test('achicar más allá del mínimo se limita: los lados no se cruzan', () => {
   const e = sola.assemble([larga, sola.addPiece({ size: [4, 4, 4], center: [60, 0, 0] })]);
   e.stretch({ axis: 'x', plane: 0, delta: -1000, minLength: 5 });
   assert.equal(larga.dims.length, 5, 'ninguna estirada baja del mínimo');
+});
+
+test('estirar partes sueltas en el workshop da lo mismo que hacerlo en un ensamble con esas partes', () => {
+  const sueltas = createWorkshop(), armadas = createWorkshop();
+  const a = mesa(sueltas), b = mesa(armadas);
+  const plan = sueltas.stretch({ parts: [a.tapa, ...a.patas], axis: 'x', side: 1, delta: 20 });
+  b.m.stretch({ axis: 'x', side: 1, delta: 20 });
+  assert.deepEqual(plan.pieces.map((x) => x.action), ['stretch', 'stay', 'move', 'stay', 'move']);
+  assert.equal(plan.plane, 0);
+  cerca([a.tapa.boundingBox.min.x, a.tapa.boundingBox.max.x], [b.tapa.boundingBox.min.x, b.tapa.boundingBox.max.x]);
+  cerca(a.patas.map((p) => p.boundingBox.center.x), b.patas.map((p) => p.boundingBox.center.x));
+  assert.equal(a.tapa.dims.length, 110);
+  sueltas.undo();
+  assert.equal(a.tapa.dims.length, 90, 'un solo paso de deshacer');
+  cerca(a.patas.map((p) => p.boundingBox.center.x), [-43, 43, -43, 43]);
+});
+
+test('workshop.stretchPlan no toca nada, y deja afuera lo que no se pasa', () => {
+  const t = createWorkshop();
+  const { tapa, patas } = mesa(t);
+  const otra = t.addPiece({ size: [4, 4, 4], center: [200, 0, 0] });
+  const plan = t.stretchPlan({ parts: [tapa, ...patas], axis: 'x', delta: 20 });
+  assert.equal(tapa.dims.length, 90);
+  assert.ok(!plan.pieces.some((x) => x.part.id === otra.id), 'la pieza que no se pasó no entra');
+  assert.equal(t.stretchPlanes({ parts: [tapa, ...patas], axis: 'x' })[0].plane, 0);
+  t.stretch({ parts: [tapa, ...patas], axis: 'x', delta: 20 });
+  cerca([otra.boundingBox.center.x], [200]);
+});
+
+test('workshop.stretch: el eje es del mundo, y un ensamble o una parte repetida entran una sola vez', () => {
+  const t = createWorkshop();
+  const { tapa, patas, m } = mesa(t);
+  m.rotate(90, 'y');
+  const plan = t.stretchPlan({ parts: [m, tapa, m], axis: 'z', delta: 10 });
+  assert.equal(plan.pieces.length, 5, 'cinco piezas, sin repetir');
+  assert.throws(() => t.stretchPlan({ parts: [], axis: 'x' }), /falta `parts`/);
+  assert.throws(() => t.stretchPlan({ parts: [tapa], axis: 'w' }), /eje inválido: w \(va 'x', 'y', 'z' del mundo\)/);
 });
 
 test('las patas bloqueadas nunca se estiran: el plano que las cruza las mueve o las deja enteras', () => {

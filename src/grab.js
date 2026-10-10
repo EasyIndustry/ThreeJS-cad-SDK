@@ -50,27 +50,32 @@ function sobreLaCara(p, f) {
   return dentro(f.outer) && !f.holes.some(dentro);
 }
 
+/** Los tipos de rasgo, del más al menos preferido. */
+export const FEATURE_KINDS = Object.freeze(/** @type {const} */ (['vertex', 'edge', 'face']));
+
 /**
  * El rasgo más cercano a `p` (todo en el marco de la pieza), o null si ninguno queda dentro de
- * su franja.
+ * su franja. `kinds`: los tipos que se aceptan (por defecto los tres); lo que no está en la lista
+ * ni se mira, así que en una esquina sin vértices pedidos se devuelve su arista o su cara.
  * @param {Vec3} p @param {Rasgos} rasgos @param {Vec3} tol la franja de cada eje
+ * @param {readonly ('vertex' | 'edge' | 'face')[]} [kinds]
  * @returns {Hallazgo | null}
  */
-export function closestFeature(p, rasgos, tol) {
+export function closestFeature(p, rasgos, tol, kinds = FEATURE_KINDS) {
   /** @type {Hallazgo | null} */
   let mejor = null;
-  for (const v of rasgos.vertices) {
+  for (const v of kinds.includes('vertex') ? rasgos.vertices : []) {
     const d = escalada(p, v, tol);
     if (d <= 1 && (!mejor || d < mejor.d)) mejor = { kind: 'vertex', point: v, d };
   }
   if (mejor) return mejor;
-  for (const e of rasgos.edges) {
+  for (const e of kinds.includes('edge') ? rasgos.edges : []) {
     const q = alSegmento(p, e);
     const d = escalada(p, q, tol);
     if (d <= 1 && (!mejor || d < mejor.d)) mejor = { kind: 'edge', point: q, edge: e, d };
   }
   if (mejor) return mejor;
-  for (const f of rasgos.faces) {
+  for (const f of kinds.includes('face') ? rasgos.faces : []) {
     const n = f.normal;
     const q = sub(p, mul(n, dot(sub(p, f.outer[0]), n)));
     if (!sobreLaCara(q, f)) continue;

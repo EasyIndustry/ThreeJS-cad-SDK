@@ -5,6 +5,26 @@ según [SemVer](https://semver.org): mientras sea `0.x`, una versión menor pued
 y si rompe queda dicho arriba de todo en esa entrada. Los pre-releases (`-rc.N`) se prueban
 en una app antes del release (ver `CONTRIBUTING.md`).
 
+## [Sin publicar]
+
+Cuatro pedidos de una app (CAD-1 a CAD-4 en Denis). Todo suma; nada rompe.
+
+### Agregado
+
+- **Estirar partes sueltas.** `taller.stretchPlanes({ parts, axis })`, `taller.stretchPlan({ parts, axis, … })`
+  y `taller.stretch({ parts, axis, … })`: lo mismo que en `Assembly`, sobre partes hermanas
+  cualquiera, sin armar un ensamble. `axis` y `plane` van en el mundo. (CAD-1)
+- **`snap(parts, { axis })`**: el imán solo corre a lo largo de un eje (`'x'`, `'y'`, `'z'` o un
+  vector), para el arrastre por un eje de un gizmo. Elige la cara que queda a menos recorrido y no
+  corrige las otras direcciones. (CAD-2)
+- **`closest(punto, { kinds })`**: pedir solo vértices, aristas o caras. Lo que no se pide ni se
+  mira: apuntar a una esquina sin pedir vértices devuelve su arista o su cara. (CAD-3)
+
+### Documentación
+
+- `snap()` dice que es un imán de **planos de caja**: pega las caras de las cajas, no mira la forma
+  real ni junta vértices o aristas. (CAD-4)
+
 ## [0.7.0] - 2026-10-07
 
 Primer release después de la 0.1.0: trae también todo lo de la 0.6.0, que se probó como

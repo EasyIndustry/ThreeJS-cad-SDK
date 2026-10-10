@@ -29,7 +29,7 @@ import { obbOf, satDepth, intersectBoxes, contactsOf, candidatePairs } from './c
 import { arrayTransforms } from './array.js';
 import { UNITS, convertLength } from './units.js';
 import { TOLERANCE_PRESETS, GRAB_RATIO, tolerancesFor } from './config.js';
-import { closestFeature, rayMesh, rayBox } from './grab.js';
+import { closestFeature, rayMesh, rayBox, FEATURE_KINDS } from './grab.js';
 import { snapMove, pushOutMove, dropMove, guides } from './placement.js';
 import { cutPlanes, stretchPlan } from './stretch.js';
 import { RELATION_KINDS, JOINT_TYPES, jointMotion, clampTo, hingeCandidates, slideCandidates, anchorDelta, distribute, crossing } from './relations.js';
@@ -37,7 +37,7 @@ import { solidOf, convexPartsOf, checkKernel, OPERATION_KINDS } from './solid.js
 import { SECTIONS, checkShape, resolveSection } from './sections.js';
 import { featuresOf } from './features.js';
 import { transformConvex, depth as hondura, contacts as contactosConvexos, intersect as cruce, volume as volumen } from './convex.js';
-import { apply, invert, compose, rotate as rotar, transpose3, frame as marco } from './frame.js';
+import { apply, invert, compose, rotate as rotar, transpose3, frame as marcoDe } from './frame.js';
 import { help } from './help.js';
 
 export { Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, Mesh, OPERATION_KINDS, SECTIONS, arrayTransforms, UNITS, convertLength, TOLERANCE_PRESETS, GRAB_RATIO, tolerancesFor, RELATION_KINDS, JOINT_TYPES };
@@ -413,10 +413,15 @@ export class Part {
    * a ella; null si no hay ninguna a la distancia del agarre. Se prefiere un vértice a una arista
    * y una arista a una cara. La franja de cada eje de una pieza es `tolerance` (la del taller si
    * no se dice), pero no más que GRAB_RATIO del largo de ese eje.
-   * @param {PointLike} point @param {{ tolerance?: number, space?: Space }} [opts] `space`: en qué marco va el punto y sale el resultado
+   * `kinds`: los tipos que se piden (`['vertex', 'edge', 'face']` por defecto); los otros ni se
+   * miran, así que apuntar a una esquina sin pedir vértices devuelve su arista o su cara.
+   * @param {PointLike} point @param {{ tolerance?: number, space?: Space, kinds?: ('vertex' | 'edge' | 'face')[] }} [opts] `space`: en qué marco va el punto y sale el resultado
    * @returns {Grab | null}
    */
-  closest(point, { tolerance, space = 'world' } = {}) {
+  closest(point, { tolerance, space = 'world', kinds } = {}) {
+    if (kinds !== undefined && (!Array.isArray(kinds) || !kinds.length || kinds.some((k) => !FEATURE_KINDS.includes(k)))) {
+      throw new TypeError(`kinds inválido: ${JSON.stringify(kinds)} (va una lista con 'vertex', 'edge' y/o 'face')`);
+    }
     const c = ctx(this), m = c.model;
     const T = tolerance ?? c.tolerances().grab;
     const propio = m.worldFrame(this.id);
@@ -426,7 +431,7 @@ export class Part {
     for (const p of m.piecesOf(this.id)) {
       const W = m.worldFrame(p.id);
       const tol = /** @type {[number, number, number]} */ (p.size.map((x) => Math.min(T, GRAB_RATIO * x)));
-      const h = closestFeature(apply(invert(W), pw), rasgosDe(c, p.id), tol);
+      const h = closestFeature(apply(invert(W), pw), rasgosDe(c, p.id), tol, kinds);
       if (!h) continue;
       const rango = h.kind === 'vertex' ? 0 : h.kind === 'edge' ? 1 : 2;
       if (!mejor || rango < mejor.rango || (rango === mejor.rango && h.d < mejor.h.d)) mejor = { h, id: p.id, W, rango };
@@ -482,7 +487,7 @@ export class Part {
     ['intersects(other, { tolerance?, exact? })', '¿se mete en la otra? (más de tolerances.penetration)'],
     ['contactsWith(other, { tolerance?, exact? })', 'dónde se toca con la otra (Contact). Con ella misma: sus uniones internas'],
     ['intersectionsWith(other, { tolerance?, exact? })', 'lo que comparte de volumen con la otra (Intersection)'],
-    ['closest(point, { tolerance?, space? })', "el vértice, la arista o la cara más cercana: { kind, piece, point, edge, face, key }, o null"],
+    ['closest(point, { tolerance?, space?, kinds? })', "el vértice, la arista o la cara más cercana: { kind, piece, point, edge, face, key }, o null"],
     ['toString()', 'para leer'],
     ['help()', 'esta tabla'],
   ];
@@ -596,19 +601,22 @@ export class Piece extends Part {
 }
 
 /**
- * Las unidades de un ensamble para estirarlo sobre su eje k: cada pieza (o instancia, que va
- * entera), con lo que ocupa en el marco del ensamble.
- * @param {Ctx} c @param {string} asmId @param {0 | 1 | 2} k @param {Set<string>} fijas
+ * Las unidades de un conjunto de partes para estirarlo sobre su eje k: cada pieza (o instancia,
+ * que va entera), con lo que ocupa en el marco `marco` (el del ensamble, o el del mundo).
+ * @param {Ctx} c @param {string[]} raices @param {Frame} marco @param {0 | 1 | 2} k @param {Set<string>} fijas
  * @returns {import('./stretch.js').Unidad[]}
  */
-function unidadesDe(c, asmId, k, fijas) {
+function unidadesDe(c, raices, marco, k, fijas) {
   const m = c.model;
-  const inv = invert(m.worldFrame(asmId));
+  const inv = invert(marco);
+  const vistas = new Set();
   const [u, v] = [0, 1, 2].filter((i) => i !== k);
   /** @type {import('./stretch.js').Unidad[]} */
   const out = [];
   /** @param {string} id */
   const visitar = (id) => {
+    if (vistas.has(id)) return;
+    vistas.add(id);
     const rec = m.own(id);
     if (rec.kind === 'assembly') { rec.children.forEach(visitar); return; }
     const pts = rec.kind === 'piece'
@@ -625,8 +633,65 @@ function unidadesDe(c, asmId, k, fijas) {
     }
     out.push({ id, lo, hi, resto: [rango(u), rango(v)], eje, fija: fijas.has(id) ? 'locked' : rec.kind === 'instance' ? 'instance' : null });
   };
-  m.ownAssembly(asmId).children.forEach(visitar);
+  raices.forEach(visitar);
   return out;
+}
+
+/** El eje de estirado, como número. @param {unknown} axis @param {string} de de quién es el marco @returns {0 | 1 | 2} */
+function ejeEstirar(axis, de) {
+  const k = typeof axis === 'number' ? axis : ({ x: 0, y: 1, z: 2 })[/** @type {string} */ (axis)];
+  if (k !== 0 && k !== 1 && k !== 2) throw new TypeError(`eje inválido: ${String(axis)} (va 'x', 'y', 'z' ${de})`);
+  return /** @type {0 | 1 | 2} */ (k);
+}
+
+/** @typedef {import('./frame.js').Frame} Frame */
+/** @typedef {{ axis: AxisLike | 0 | 1 | 2, plane?: number, side?: 1 | -1, delta?: number, locked?: (Part | string)[], minLength?: number }} StretchOpts */
+
+/**
+ * Lo que haría estirar `raices` por un plano, en el marco `marco`. Sin tocar nada.
+ * @param {Ctx} c @param {string[]} raices @param {Frame} marco @param {string} de de quién es el marco
+ * @param {StretchOpts} opts
+ */
+function planDeEstirar(c, raices, marco, de, { axis, plane, side = 1, delta = 0, locked = [], minLength }) {
+  const k = ejeEstirar(axis, de);
+  if (side !== 1 && side !== -1) throw new TypeError(`side inválido: ${String(side)} (va 1 o -1)`);
+  if (typeof delta !== 'number' || !Number.isFinite(delta)) throw new TypeError(`delta inválido: ${String(delta)}`);
+  const us = unidadesDe(c, raices, marco, k, fijasDe(c, locked));
+  const p = plane ?? cutPlanes(us)[0]?.plane;
+  if (p === undefined) throw new Error(`no hay dónde cortar sobre ${'xyz'[k]}`);
+  const { pasos, min } = stretchPlan(us, { plane: p, side, minLength: minLength ?? c.tolerances().minLength });
+  const aplicado = Math.max(delta, min);
+  return Object.freeze({
+    axis: k, plane: p, side, delta: aplicado, requested: delta, min, limited: aplicado !== delta,
+    pieces: Object.freeze(pasos.map((x) => Object.freeze({ part: c.part(x.id), action: x.action, ...(x.axis === undefined ? {} : { axis: x.axis }), ...(x.reason ? { reason: x.reason } : {}) }))),
+  });
+}
+
+/** @param {Ctx} c @param {(Part | string)[]} locked */
+function fijasDe(c, locked) {
+  return new Set(locked.flatMap((x) => [idDe(x), ...c.model.piecesOf(idDe(x)).map((p) => p.id)]));
+}
+
+/**
+ * Hace lo que dice el plan, en un solo paso de deshacer. `dir`: hacia dónde corre el eje de
+ * estirado, en el mundo.
+ * @param {Ctx} c @param {ReturnType<typeof planDeEstirar>} plan @param {[number, number, number]} dir
+ */
+function estirarPlan(c, plan, dir) {
+  const m = c.model;
+  const corre = (/** @type {number} */ d) => /** @type {[number, number, number]} */ (dir.map((x) => x * d));
+  m.transaction(() => {
+    for (const x of plan.pieces) {
+      if (x.action === 'move') m.move(x.part.id, corre(plan.side * plan.delta));
+      else if (x.action === 'stretch' && x.axis !== undefined) {
+        const pieza = /** @type {Piece} */ (x.part);
+        const s = /** @type {[number, number, number]} */ ([pieza.size.x, pieza.size.y, pieza.size.z]);
+        s[x.axis] += plan.delta;
+        pieza.resize(s);
+        m.move(x.part.id, corre((plan.side * plan.delta) / 2));
+      }
+    }
+  });
 }
 
 export class Assembly extends Part {
@@ -641,15 +706,11 @@ export class Assembly extends Part {
   // Todo en el marco del ensamble, sobre uno de sus ejes ('x', 'y', 'z' o 0, 1, 2).
 
   /** @param {AxisLike | 0 | 1 | 2} axis @returns {0 | 1 | 2} */
-  #eje(axis) {
-    const k = typeof axis === 'number' ? axis : ({ x: 0, y: 1, z: 2 })[/** @type {string} */ (axis)];
-    if (k !== 0 && k !== 1 && k !== 2) throw new TypeError(`eje inválido: ${String(axis)} (va 'x', 'y', 'z' del ensamble)`);
-    return /** @type {0 | 1 | 2} */ (k);
-  }
-  /** @param {(Part | string)[]} locked */
-  #fijas(locked) {
+  #eje(axis) { return ejeEstirar(axis, 'del ensamble'); }
+  /** Lo que se estira: sus hijos, en su marco. */
+  #unidades() {
     const m = ctx(this).model;
-    return new Set(locked.flatMap((x) => [idDe(x), ...m.piecesOf(idDe(x)).map((p) => p.id)]));
+    return { raices: [...m.ownAssembly(this.id).children], marco: m.worldFrame(this.id) };
   }
 
   /**
@@ -659,7 +720,8 @@ export class Assembly extends Part {
    * @param {AxisLike | 0 | 1 | 2} axis @param {{ locked?: (Part | string)[] }} [opts]
    */
   stretchPlanes(axis, { locked = [] } = {}) {
-    return Object.freeze(cutPlanes(unidadesDe(ctx(this), this.id, this.#eje(axis), this.#fijas(locked))).map((p) => Object.freeze(p)));
+    const { raices, marco } = this.#unidades();
+    return Object.freeze(cutPlanes(unidadesDe(ctx(this), raices, marco, this.#eje(axis), fijasDe(ctx(this), locked))).map((p) => Object.freeze(p)));
   }
 
   /**
@@ -667,49 +729,25 @@ export class Assembly extends Part {
    * se puede achicar. `side`: el lado que se arrastra (1: hacia +axis). `delta`: cuánto crece
    * (negativo: se achica; se limita a `min`). `plane`: el mejor de stretchPlanes si no se dice.
    * `locked`: lo que nunca se estira (se mueve o se queda entero).
-   * @param {{ axis: AxisLike | 0 | 1 | 2, plane?: number, side?: 1 | -1, delta?: number, locked?: (Part | string)[], minLength?: number }} opts
+   * @param {StretchOpts} opts
    */
-  stretchPlan({ axis, plane, side = 1, delta = 0, locked = [], minLength }) {
-    const c = ctx(this);
-    const k = this.#eje(axis);
-    if (side !== 1 && side !== -1) throw new TypeError(`side inválido: ${String(side)} (va 1 o -1)`);
-    if (typeof delta !== 'number' || !Number.isFinite(delta)) throw new TypeError(`delta inválido: ${String(delta)}`);
-    const us = unidadesDe(c, this.id, k, this.#fijas(locked));
-    const p = plane ?? cutPlanes(us)[0]?.plane;
-    if (p === undefined) throw new Error(`${this.id}: no hay dónde cortar sobre ${'xyz'[k]}`);
-    const { pasos, min } = stretchPlan(us, { plane: p, side, minLength: minLength ?? c.tolerances().minLength });
-    const aplicado = Math.max(delta, min);
-    return Object.freeze({
-      axis: k, plane: p, side, delta: aplicado, requested: delta, min, limited: aplicado !== delta,
-      pieces: Object.freeze(pasos.map((x) => Object.freeze({ part: c.part(x.id), action: x.action, ...(x.axis === undefined ? {} : { axis: x.axis }), ...(x.reason ? { reason: x.reason } : {}) }))),
-    });
+  stretchPlan(opts) {
+    const { raices, marco } = this.#unidades();
+    try { return planDeEstirar(ctx(this), raices, marco, 'del ensamble', opts); }
+    catch (e) { if (e instanceof Error && e.message.startsWith('no hay dónde')) e.message = `${this.id}: ${e.message}`; throw e; }
   }
 
   /**
    * Estira (o achica) el ensamble por un plano: hace lo de stretchPlan, en un solo paso de
    * deshacer, y lo devuelve. Las piezas estiradas cambian su medida a lo largo del eje y sus
    * operaciones se reaplican (van normalizadas).
-   * @param {Parameters<Assembly['stretchPlan']>[0]} opts
+   * @param {StretchOpts} opts
    */
   stretch(opts) {
-    const c = ctx(this), m = c.model;
     const plan = this.stretchPlan(opts);
     const e = /** @type {[number, number, number]} */ ([0, 0, 0]);
     e[plan.axis] = 1;
-    const dir = rotar(m.worldFrame(this.id).r, e);
-    const corre = (/** @type {number} */ d) => /** @type {[number, number, number]} */ (dir.map((x) => x * d));
-    m.transaction(() => {
-      for (const x of plan.pieces) {
-        if (x.action === 'move') m.move(x.part.id, corre(plan.side * plan.delta));
-        else if (x.action === 'stretch' && x.axis !== undefined) {
-          const pieza = /** @type {Piece} */ (x.part);
-          const s = /** @type {[number, number, number]} */ ([pieza.size.x, pieza.size.y, pieza.size.z]);
-          s[x.axis] += plan.delta;
-          pieza.resize(s);
-          m.move(x.part.id, corre((plan.side * plan.delta) / 2));
-        }
-      }
-    });
+    estirarPlan(ctx(this), plan, rotar(ctx(this).model.worldFrame(this.id).r, e));
     return plan;
   }
 
@@ -1387,6 +1425,11 @@ export function createWorkshop(init = {}) {
 
   /** @param {Part | string | (Part | string)[]} x @returns {string[]} los ids de las piezas que se mueven */
   const piezasQueSeMueven = (x) => [...new Set((Array.isArray(x) ? x : [x]).flatMap((p) => model.piecesOf(idDe(p)).map((q) => q.id)))];
+  /** @param {(Part | string)[]} parts @returns {string[]} los ids de las partes a estirar */
+  const aEstirar = (parts) => {
+    if (!Array.isArray(parts) || !parts.length) throw new TypeError('stretch: falta `parts`, las partes a estirar');
+    return [...new Set(parts.map(idDe))];
+  };
   /** @param {string[]} mueven @param {(Part | string)[] | undefined} contra */
   const lasOtras = (mueven, contra) => {
     const fuera = new Set(mueven);
@@ -1567,16 +1610,47 @@ export function createWorkshop(init = {}) {
      * a `distance` o menos (enfrentadas: se tocan; del mismo lado: al ras), y qué la causó. No
      * aplica nada. `grid`: en los ejes del mundo que el imán no tocó, la esquina cae en la grilla.
      * @param {Part | string | (Part | string)[]} parts
-     * @param {{ against?: (Part | string)[], distance?: number, grid?: number | null }} [opts]
+     * Con `axis` ('x', 'y', 'z' del mundo o un vector), solo corre a lo largo de esa dirección:
+     * pega la cara que queda a menos recorrido y no mueve nada en las otras (para el arrastre por
+     * un eje de un gizmo).
+     * @param {{ against?: (Part | string)[], distance?: number, grid?: number | null, axis?: AxisLike }} [opts]
      */
-    snap(parts, { against, distance, grid = null } = {}) {
+    snap(parts, { against, distance, grid = null, axis } = {}) {
       const mueven = piezasQueSeMueven(parts);
-      const r = snapMove(mueven.map((id) => obbOf(model, id)), lasOtras(mueven, against), { distance: distance ?? c.tolerances().snap, grid });
+      const r = snapMove(mueven.map((id) => obbOf(model, id)), lasOtras(mueven, against), { distance: distance ?? c.tolerances().snap, grid, axis: axis === undefined ? null : arriba(axis) });
       if (!r) return null;
       return Object.freeze({
         transform: Transform.translation(r.t),
         snaps: Object.freeze(r.snaps.map((x) => Object.freeze({ normal: new Vector3d(...x.normal), delta: x.delta, other: c.part(x.other), kind: x.kind }))),
       });
+    },
+    /**
+     * Los planos donde se puede cortar para estirar `parts` (partes hermanas cualquiera, no hace
+     * falta un ensamble) sobre un eje del mundo: el medio de cada hueco entre bordes, el más
+     * ancho primero.
+     * @param {{ parts: (Part | string)[], axis: AxisLike | 0 | 1 | 2, locked?: (Part | string)[] }} opts
+     */
+    stretchPlanes({ parts, axis, locked = [] }) {
+      return Object.freeze(cutPlanes(unidadesDe(c, aEstirar(parts), marcoDe(), ejeEstirar(axis, 'del mundo'), fijasDe(c, locked))).map((p) => Object.freeze(p)));
+    },
+    /**
+     * Lo que haría estirar `parts` por un plano (sin hacerlo): como `Assembly.stretchPlan`, pero
+     * sobre partes sueltas y con `axis` y `plane` en el mundo.
+     * @param {StretchOpts & { parts: (Part | string)[] }} opts
+     */
+    stretchPlan({ parts, ...opts }) {
+      return planDeEstirar(c, aEstirar(parts), marcoDe(), 'del mundo', opts);
+    },
+    /**
+     * Estira (o achica) `parts` por un plano, en un solo paso de deshacer, y devuelve el plan.
+     * @param {StretchOpts & { parts: (Part | string)[] }} opts
+     */
+    stretch(opts) {
+      const plan = this.stretchPlan(opts);
+      const e = /** @type {[number, number, number]} */ ([0, 0, 0]);
+      e[plan.axis] = 1;
+      estirarPlan(c, plan, e);
+      return plan;
     },
     /**
      * Si lo que se mueve está metido en otras piezas, la traslación que lo saca por el lado de
@@ -1801,7 +1875,10 @@ export const WORKSHOP_MEMBERS = [
   ['instantiate(part, { name?, parent?, placement? })', 'una instancia: la misma parte colocada otra vez; editar la fuente cambia todas'],
   ['array(part, spec)', "repetir una parte en línea, en área o alrededor de un eje: crea instancias (ver arrayTransforms)"],
   ['pick(ray, { exclude? })', 'la primera pieza que corta un rayo { origin, direction }, contra su forma real: { part, point, distance, normal }, o null'],
-  ['snap(parts, { against?, distance?, grid? })', 'imán: { transform, snaps } que pega sus caras a las de otras piezas cercanas (no aplica nada)'],
+  ['stretchPlanes({ parts, axis, locked? })', 'dónde se puede cortar para estirar partes sueltas sobre un eje del mundo: { plane, gap }, el hueco más ancho primero'],
+  ['stretchPlan({ parts, axis, plane?, side?, delta?, locked?, minLength? })', 'lo que haría estirar partes sueltas por un plano, sin hacerlo: qué se estira, se mueve o se queda, y el límite'],
+  ['stretch({ parts, axis, plane?, side?, delta?, locked?, minLength? })', 'estirar (o achicar) partes sueltas por un plano del mundo, en un solo paso de deshacer'],
+  ['snap(parts, { against?, distance?, grid?, axis? })', 'imán de planos de caja: { transform, snaps } que pega las caras de su caja a las de las cajas de otras piezas cercanas (no aplica nada, y no mira la forma real); con axis, solo corre a lo largo de ese eje'],
   ['pushOut(parts, { against?, floor?, up? })', 'si está metida en otras, { transform, from } que la saca por el lado de menor penetración'],
   ['drop(parts, { against?, floor?, up? })', 'apoyar: { transform, distance, on } hasta tocar lo de abajo o el piso'],
   ['alignmentGuides(parts, { against?, tolerance? })', 'los planos de otras piezas con los que quedó alineada, los más cercanos primero'],

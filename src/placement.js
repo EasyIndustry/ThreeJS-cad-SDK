@@ -108,10 +108,13 @@ function gauss(G, b) {
  * direcciones independientes, las más cercanas primero. Con `grid`, en los ejes del mundo que el
  * imán no tocó, la esquina del grupo cae sobre la grilla.
  * @param {readonly OBB[]} moving @param {readonly OBB[]} others
- * @param {{ distance: number, grid?: number | null }} opts
+ * Con `axis` (unitario), el grupo solo puede correr a lo largo de esa dirección: se elige UNA
+ * cara (la que queda a menos recorrido) y la traslación es múltiplo de `axis`; la grilla solo
+ * actúa si `axis` es un eje del mundo.
+ * @param {{ distance: number, grid?: number | null, axis?: Vec3 | null }} opts
  * @returns {{ t: Vec3, snaps: { normal: Vec3, delta: number, other: string, kind: 'face' | 'flush' }[] } | null}
  */
-export function snapMove(moving, others, { distance, grid = null }) {
+export function snapMove(moving, others, { distance, grid = null, axis = null }) {
   /** @type {{ normal: Vec3, delta: number, other: string, kind: 'face' | 'flush' }[]} */
   const candidatos = [];
   for (const b of others) {
@@ -122,6 +125,7 @@ export function snapMove(moving, others, { distance, grid = null }) {
       else if (c > 1 - 1e-9) candidatos.push({ normal: fa.n, delta: fb.d - fa.d, other: b.id, kind: 'flush' });
     }
   }
+  if (axis) return snapAlong(moving, candidatos, axis, { distance, grid });
   const validos = candidatos.filter((c) => Math.abs(c.delta) <= distance).sort((x, y) => Math.abs(x.delta) - Math.abs(y.delta));
   /** @type {typeof validos} */
   const elegidos = [];
@@ -143,6 +147,29 @@ export function snapMove(moving, others, { distance, grid = null }) {
   }
   if (!elegidos.length && len(t) === 0) return null;
   return { t, snaps: elegidos };
+}
+
+/**
+ * El imán sobre una sola dirección: de cada cara candidata, cuánto hay que correr a lo largo de
+ * `axis` para que quede pegada (o al ras); gana la de menor recorrido.
+ * @param {readonly OBB[]} moving
+ * @param {{ normal: Vec3, delta: number, other: string, kind: 'face' | 'flush' }[]} candidatos
+ * @param {Vec3} axis @param {{ distance: number, grid: number | null }} opts
+ * @returns {{ t: Vec3, snaps: { normal: Vec3, delta: number, other: string, kind: 'face' | 'flush' }[] } | null}
+ */
+function snapAlong(moving, candidatos, axis, { distance, grid }) {
+  const con = candidatos
+    .map((c) => ({ c, s: Math.abs(dot(c.normal, axis)) > 1e-9 ? c.delta / dot(c.normal, axis) : NaN }))
+    .filter((x) => Math.abs(x.s) <= distance)
+    .sort((x, y) => Math.abs(x.s) - Math.abs(y.s));
+  if (con.length) return { t: mul(axis, con[0].s), snaps: [con[0].c] };
+  const k = [0, 1, 2].find((i) => Math.abs(axis[i]) > 1 - 1e-9);
+  if (grid && grid > 0 && k !== undefined) {
+    const lo = cajaMundo(moving).lo[k];
+    const d = Math.round(lo / grid) * grid - lo;
+    if (Math.abs(d) > 1e-12) return { t: mul(axis, d * Math.sign(axis[k])), snaps: [] };
+  }
+  return null;
 }
 
 /**

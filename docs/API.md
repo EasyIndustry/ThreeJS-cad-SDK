@@ -85,7 +85,10 @@ Lo que devuelve `createWorkshop()`. En los ejemplos se llama `taller`, pero el n
 | `instantiate(part, { name?, parent?, placement? })` | una instancia: la misma parte colocada otra vez; editar la fuente cambia todas |
 | `array(part, spec)` | repetir una parte en línea, en área o alrededor de un eje: crea instancias (ver arrayTransforms) |
 | `pick(ray, { exclude? })` | la primera pieza que corta un rayo { origin, direction }, contra su forma real: { part, point, distance, normal }, o null |
-| `snap(parts, { against?, distance?, grid? })` | imán: { transform, snaps } que pega sus caras a las de otras piezas cercanas (no aplica nada) |
+| `stretchPlanes({ parts, axis, locked? })` | dónde se puede cortar para estirar partes sueltas sobre un eje del mundo: { plane, gap }, el hueco más ancho primero |
+| `stretchPlan({ parts, axis, plane?, side?, delta?, locked?, minLength? })` | lo que haría estirar partes sueltas por un plano, sin hacerlo: qué se estira, se mueve o se queda, y el límite |
+| `stretch({ parts, axis, plane?, side?, delta?, locked?, minLength? })` | estirar (o achicar) partes sueltas por un plano del mundo, en un solo paso de deshacer |
+| `snap(parts, { against?, distance?, grid?, axis? })` | imán de planos de caja: { transform, snaps } que pega las caras de su caja a las de las cajas de otras piezas cercanas (no aplica nada, y no mira la forma real); con axis, solo corre a lo largo de ese eje |
 | `pushOut(parts, { against?, floor?, up? })` | si está metida en otras, { transform, from } que la saca por el lado de menor penetración |
 | `drop(parts, { against?, floor?, up? })` | apoyar: { transform, distance, on } hasta tocar lo de abajo o el piso |
 | `alignmentGuides(parts, { against?, tolerance? })` | los planos de otras piezas con los que quedó alineada, los más cercanos primero |
@@ -157,7 +160,7 @@ Identidad, colocación, geometría consultable y los verbos. La geometría se le
 | `intersects(other, { tolerance?, exact? })` | ¿se mete en la otra? (más de tolerances.penetration) |
 | `contactsWith(other, { tolerance?, exact? })` | dónde se toca con la otra (Contact). Con ella misma: sus uniones internas |
 | `intersectionsWith(other, { tolerance?, exact? })` | lo que comparte de volumen con la otra (Intersection) |
-| `closest(point, { tolerance?, space? })` | el vértice, la arista o la cara más cercana: { kind, piece, point, edge, face, key }, o null |
+| `closest(point, { tolerance?, space?, kinds? })` | el vértice, la arista o la cara más cercana: { kind, piece, point, edge, face, key }, o null |
 | `toString()` | para leer |
 | `help()` | esta tabla |
 

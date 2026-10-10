@@ -91,13 +91,13 @@ footer { color: var(--muted); font-size: 13px; padding: 24px 0 0; border-top: 1p
 <div class="top"><div class="in">
   <div class="marca"><b>threejs-cad-sdk</b><span class="ver">0.7.0</span></div>
   <label class="buscar"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-    <input id="q" type="search" placeholder="Buscar en 270 miembros: addPiece, contacto, bisagra…" autocomplete="off" spellcheck="false" aria-label="Buscar en la API"><kbd>/</kbd></label>
+    <input id="q" type="search" placeholder="Buscar en 273 miembros: addPiece, contacto, bisagra…" autocomplete="off" spellcheck="false" aria-label="Buscar en la API"><kbd>/</kbd></label>
   <div class="links"><a href="https://github.com/EasyIndustry/ThreeJS-cad-SDK#readme">Guía</a><a href="API.md">Markdown</a><a href="https://github.com/EasyIndustry/ThreeJS-cad-SDK/blob/main/CHANGELOG.md">Cambios</a><a href="https://github.com/EasyIndustry/ThreeJS-cad-SDK">GitHub</a></div>
 </div></div>
 <div class="wrap">
 <nav aria-label="Secciones"><ul>
 <li class="grupo">Para empezar</li><li><a href="#module" data-sec="module">Módulo<span class="n">17</span></a></li>
-<li><a href="#workshop" data-sec="workshop">Workshop<span class="n">42</span></a></li>
+<li><a href="#workshop" data-sec="workshop">Workshop<span class="n">45</span></a></li>
 <li class="grupo">Partes</li><li><a href="#part" data-sec="part">Part<span class="n">27</span></a></li>
 <li><a href="#piece" data-sec="piece">Piece<span class="n">16</span></a></li>
 <li><a href="#assembly" data-sec="assembly">Assembly<span class="n">7</span></a></li>
@@ -223,9 +223,21 @@ footer { color: var(--muted); font-size: 13px; padding: 24px 0 0; border-top: 1p
 <a class="sig" href="#workshop.pick"><code>pick(ray, { exclude? })</code></a>
 <p class="doc">la primera pieza que corta un rayo { origin, direction }, contra su forma real: { part, point, distance, normal }, o null</p>
 </div>
-<div class="m" id="workshop.snap" data-q="workshop el documento: crear, buscar y guardar partes snap(parts, { against?, distance?, grid? }) iman: { transform, snaps } que pega sus caras a las de otras piezas cercanas (no aplica nada)">
-<a class="sig" href="#workshop.snap"><code>snap(parts, { against?, distance?, grid? })</code></a>
-<p class="doc">imán: { transform, snaps } que pega sus caras a las de otras piezas cercanas (no aplica nada)</p>
+<div class="m" id="workshop.stretchPlanes" data-q="workshop el documento: crear, buscar y guardar partes stretchplanes({ parts, axis, locked? }) donde se puede cortar para estirar partes sueltas sobre un eje del mundo: { plane, gap }, el hueco mas ancho primero">
+<a class="sig" href="#workshop.stretchPlanes"><code>stretchPlanes({ parts, axis, locked? })</code></a>
+<p class="doc">dónde se puede cortar para estirar partes sueltas sobre un eje del mundo: { plane, gap }, el hueco más ancho primero</p>
+</div>
+<div class="m" id="workshop.stretchPlan" data-q="workshop el documento: crear, buscar y guardar partes stretchplan({ parts, axis, plane?, side?, delta?, locked?, minlength? }) lo que haria estirar partes sueltas por un plano, sin hacerlo: que se estira, se mueve o se queda, y el limite">
+<a class="sig" href="#workshop.stretchPlan"><code>stretchPlan({ parts, axis, plane?, side?, delta?, locked?, minLength? })</code></a>
+<p class="doc">lo que haría estirar partes sueltas por un plano, sin hacerlo: qué se estira, se mueve o se queda, y el límite</p>
+</div>
+<div class="m" id="workshop.stretch" data-q="workshop el documento: crear, buscar y guardar partes stretch({ parts, axis, plane?, side?, delta?, locked?, minlength? }) estirar (o achicar) partes sueltas por un plano del mundo, en un solo paso de deshacer">
+<a class="sig" href="#workshop.stretch"><code>stretch({ parts, axis, plane?, side?, delta?, locked?, minLength? })</code></a>
+<p class="doc">estirar (o achicar) partes sueltas por un plano del mundo, en un solo paso de deshacer</p>
+</div>
+<div class="m" id="workshop.snap" data-q="workshop el documento: crear, buscar y guardar partes snap(parts, { against?, distance?, grid?, axis? }) iman de planos de caja: { transform, snaps } que pega las caras de su caja a las de las cajas de otras piezas cercanas (no aplica nada, y no mira la forma real); con axis, solo corre a lo largo de ese eje">
+<a class="sig" href="#workshop.snap"><code>snap(parts, { against?, distance?, grid?, axis? })</code></a>
+<p class="doc">imán de planos de caja: { transform, snaps } que pega las caras de su caja a las de las cajas de otras piezas cercanas (no aplica nada, y no mira la forma real); con axis, solo corre a lo largo de ese eje</p>
 </div>
 <div class="m" id="workshop.pushOut" data-q="workshop el documento: crear, buscar y guardar partes pushout(parts, { against?, floor?, up? }) si esta metida en otras, { transform, from } que la saca por el lado de menor penetracion">
 <a class="sig" href="#workshop.pushOut"><code>pushOut(parts, { against?, floor?, up? })</code></a>
@@ -474,8 +486,8 @@ footer { color: var(--muted); font-size: 13px; padding: 24px 0 0; border-top: 1p
 <a class="sig" href="#part.intersectionsWith"><code>intersectionsWith(other, { tolerance?, exact? })</code></a>
 <p class="doc">lo que comparte de volumen con la otra (Intersection)</p>
 </div>
-<div class="m" id="part.closest" data-q="part lo que tiene toda parte: piece y assembly closest(point, { tolerance?, space? }) el vertice, la arista o la cara mas cercana: { kind, piece, point, edge, face, key }, o null">
-<a class="sig" href="#part.closest"><code>closest(point, { tolerance?, space? })</code></a>
+<div class="m" id="part.closest" data-q="part lo que tiene toda parte: piece y assembly closest(point, { tolerance?, space?, kinds? }) el vertice, la arista o la cara mas cercana: { kind, piece, point, edge, face, key }, o null">
+<a class="sig" href="#part.closest"><code>closest(point, { tolerance?, space?, kinds? })</code></a>
 <p class="doc">el vértice, la arista o la cara más cercana: { kind, piece, point, edge, face, key }, o null</p>
 </div>
 <div class="m" id="part.toString" data-q="part lo que tiene toda parte: piece y assembly tostring() para leer">
