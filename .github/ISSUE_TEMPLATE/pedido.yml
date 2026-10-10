@@ -1,0 +1,39 @@
+name: Pedido
+description: Algo que el SDK no hace y debería hacer. Pasa por el filtro de POLITICA.md.
+labels: [triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Este SDK es agnóstico: no entra la solución de una app, entra la herramienta que resuelve esa clase de problema para cualquier app. Antes de seguir, mirá [POLITICA.md](https://github.com/EasyIndustry/ThreeJS-cad-SDK/blob/main/POLITICA.md).
+  - type: textarea
+    id: problema
+    attributes:
+      label: Qué problema tenés
+      description: La necesidad, no la solución. Qué intentás hacer y dónde te frena el SDK.
+    validations:
+      required: true
+  - type: textarea
+    id: propuesta
+    attributes:
+      label: Qué proponés
+      description: Cómo lo resolverías. Si tenés una idea de la API, mejor con valores planos.
+  - type: textarea
+    id: otras-apps
+    attributes:
+      label: A qué otras apps les serviría
+      description: Al menos dos tipos de app distintos, no dos pantallas de la misma. Si hoy es solo tu caso, contalo igual, quizás se puede generalizar.
+    validations:
+      required: true
+  - type: textarea
+    id: hoy
+    attributes:
+      label: Cómo lo resolvés hoy
+      description: Con la API que hay, con un punto de extensión, o con código propio en tu app (qué tuviste que copiar o tocar por fuera).
+  - type: checkboxes
+    id: politica
+    attributes:
+      label: Antes de enviar
+      options:
+        - label: Leí POLITICA.md y lo que pido no es algo de una sola app o industria (un catálogo, un nombre propio, un default de un oficio).
+          required: true

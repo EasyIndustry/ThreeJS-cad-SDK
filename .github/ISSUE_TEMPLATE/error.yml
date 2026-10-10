@@ -1,0 +1,33 @@
+name: Error
+description: El SDK no hace lo que promete (la API, la documentación o help()).
+labels: [triage, error]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Si "no anda" quiere decir "no hace lo que mi app necesita", es un **Pedido**, no un error.
+  - type: textarea
+    id: que-paso
+    attributes:
+      label: Qué pasó y qué esperabas
+    validations:
+      required: true
+  - type: textarea
+    id: reproducir
+    attributes:
+      label: Cómo reproducirlo
+      description: Lo mínimo que lo muestra. Lo ideal es un pedazo de código corto que corra en Node.
+    validations:
+      required: true
+  - type: textarea
+    id: versiones
+    attributes:
+      label: Versiones
+      description: Del SDK, y de Node o del navegador. De three, solo si es en el adaptador.
+    validations:
+      required: true
+  - type: textarea
+    id: consola
+    attributes:
+      label: Errores en la consola
+      render: text

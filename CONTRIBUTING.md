@@ -4,6 +4,11 @@ Este SDK se vendoriza en varias apps. Lo que entra acá lo van a copiar todas, a
 pregunta antes de cada cambio no es "¿le sirve a la app que lo pidió?" sino "¿le sirve a
 cualquier CAD de piezas rígidas?".
 
+**Primero, [`POLITICA.md`](POLITICA.md):** qué entra, cómo se evalúa un pedido y qué puede pasar
+con él. Un pedido de una app de casa pasa por el mismo filtro que uno de afuera. Un pedido es un
+issue con la plantilla *Pedido*; un error, con la plantilla *Error*; un PR, mejor después de un
+issue `aceptado`.
+
 ## Agnóstico: qué entra y qué no
 
 - **Entra:** geometría, marcos, composición, contacto e intersección, y las relaciones entre

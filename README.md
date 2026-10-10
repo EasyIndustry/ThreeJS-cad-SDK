@@ -632,3 +632,9 @@ Dicho para que nadie lo dé por hecho:
 ## Licencia
 
 [MIT](LICENSE) © 2026 EasyIndustry.
+
+## Contribuir
+
+Un pedido pasa por el filtro de [`POLITICA.md`](POLITICA.md); cómo se contribuye, en
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Convivencia: [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md);
+seguridad: [`SECURITY.md`](SECURITY.md).
