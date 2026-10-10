@@ -5,7 +5,7 @@ según [SemVer](https://semver.org): mientras sea `0.x`, una versión menor pued
 y si rompe queda dicho arriba de todo en esa entrada. Los pre-releases (`-rc.N`) se prueban
 en una app antes del release (ver `CONTRIBUTING.md`).
 
-## [Sin publicar]
+## [0.8.0-rc.1] - 2026-10-10
 
 Cuatro pedidos de una app (CAD-1 a CAD-4 en Denis). Todo suma; nada rompe.
 
