@@ -1,6 +1,6 @@
 {
   "name": "threejs-cad-sdk",
-  "version": "0.8.0-rc.1",
+  "version": "0.8.0-rc.2",
   "description": "Modelo de CAD para apps de three.js: piezas, ensambles, marcos locales y del mundo, contacto e intersección. Núcleo puro (corre en Node y en el navegador) y un adaptador para three.",
   "type": "module",
   "license": "MIT",

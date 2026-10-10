@@ -2344,7 +2344,7 @@ test('un ciclo, una punta de más o caras no paralelas se rechazan sin cambiar n
   const girada = t.addPiece({ size: [2, 70, 50], center: [-60, 35, 0] }).rotate(30, 'y');
   assert.equal(t.validateLink({ base: girada, face: { axis: 'x', side: 1 }, moving: otro }).reason, 'not-parallel');
   assert.equal(t.validateLink({ base: m.est, face: { axis: 'x', side: 1 }, moving: m.est }).reason, 'self');
-  assert.deepEqual({ ...t.validateLink({ base: m.izq, face: { axis: 'y', side: 1 }, moving: otro }) }, { ok: true });
+  assert.equal(t.validateLink({ base: m.izq, face: { axis: 'y', side: 1 }, moving: otro }).ok, true);
   assert.equal(t.relations().length, 2, 'lo rechazado no se creó');
   assert.match(antes, /"relations":\[\{"id":"R-1"/);
 });
@@ -2452,4 +2452,82 @@ test('el SDK no depende de ningún paquete externo ni del navegador (lo puede us
     assert.doesNotMatch(sin, /\b(document|window|THREE)\./, `${f} usa el navegador o three`);
     if (f.startsWith('src/')) assert.doesNotMatch(sin, /from\s*['"]\.\.\//, `${f} importa algo de afuera de src/: el núcleo no conoce al adaptador`);
   }
+});
+
+// ---------- validateLink devuelve la punta que se ancla ----------
+
+test('validateLink dice qué punta se va a anclar, igual que el vínculo ya creado', () => {
+  const t = createWorkshop();
+  const pared = t.addPiece({ size: [2, 70, 50], center: [0, 35, 0] });
+  const tabla = t.addPiece({ size: [40, 2, 50], center: [25, 35, 0] });      // su punta -x mira a la pared
+  const v = t.validateLink({ base: pared, face: { axis: 'x', side: 1 }, moving: tabla });
+  assert.equal(v.ok, true);
+  assert.deepEqual({ ...v.end }, { localAxis: 'x', localSide: -1 });
+  assert.deepEqual({ ...v.face }, { localAxis: 'x', localSide: 1 });
+  const link = t.addLink({ base: pared, face: { axis: 'x', side: 1 }, moving: tabla });
+  assert.deepEqual({ ...link.end }, { ...v.end }, 'lo que se anunció es lo que se ancló');
+  assert.deepEqual({ ...link.face }, { ...v.face });
+  assert.throws(() => { v.end.localAxis = 'y'; }, 'de solo lectura');
+});
+
+// ---------- partes fijas ----------
+
+test('una parte fija no la mueve el asentador: el vínculo no se crea, y el que ya estaba queda roto', () => {
+  const t = createWorkshop();
+  const pared = t.addPiece({ size: [2, 70, 50], center: [0, 35, 0] });
+  const tabla = t.addPiece({ size: [40, 2, 50], center: [25, 35, 0] });
+  assert.equal(tabla.fixed, false);
+  const link = t.addLink({ base: pared, face: { axis: 'x', side: 1 }, moving: tabla });
+  tabla.setFixed(true);
+  assert.equal(tabla.fixed, true);
+  pared.move([10, 0, 0]);
+  cerca([tabla.boundingBox.min.x], [5], 1e-9, 'la fija se queda donde estaba (a 4 de la pared, el hueco que tenía)');
+  assert.match(link.broken, /es fija/);
+  tabla.setFixed(false);
+  cerca([tabla.boundingBox.min.x], [15], 1e-9, 'suelta, el vínculo la lleva a su lugar, con el mismo hueco');
+  assert.equal(link.broken, null);
+  tabla.setFixed(true);
+  const otro = t.addPiece({ size: [2, 70, 50], center: [100, 35, 0] });
+  const v = t.validateLink({ base: otro, face: { axis: 'x', side: -1 }, moving: tabla });
+  assert.equal(v.reason, 'fixed');
+  assert.throws(() => t.addLink({ base: otro, face: { axis: 'x', side: -1 }, moving: tabla }), /fija/);
+});
+
+test('una parte fija se deja mover a mano: move y transform no lo miran', () => {
+  const t = createWorkshop();
+  const p = t.addPiece({ size: [4, 4, 4], fixed: true });
+  assert.equal(p.fixed, true);
+  p.move([5, 0, 0]);
+  cerca([p.boundingBox.center.x], [5]);
+});
+
+test('un ensamble fijo fija todo lo de adentro; la pieza suelta, solo ella', () => {
+  const t = createWorkshop();
+  const a = t.addPiece({ size: [2, 2, 2] }), b = t.addPiece({ size: [2, 2, 2], center: [5, 0, 0] });
+  const e = t.assemble([a, b]);
+  e.setFixed(true);
+  assert.deepEqual([e.fixed, a.fixed, b.fixed], [true, true, true]);
+  a.setFixed(false);
+  assert.equal(a.fixed, true, 'sigue fija mientras el ensamble lo sea');
+  e.setFixed(false);
+  assert.deepEqual([e.fixed, a.fixed, b.fixed], [false, false, false]);
+  b.setFixed(true);
+  assert.deepEqual([e.fixed, a.fixed, b.fixed], [false, false, true]);
+  assert.throws(() => a.setFixed('si'), /fixed inválido/);
+});
+
+test('fijo se guarda y se deshace; un documento sin partes fijas sigue saliendo como versión 5', () => {
+  const t = createWorkshop();
+  const p = t.addPiece({ size: [2, 2, 2] });
+  assert.equal(t.toJSON().version, 5);
+  assert.ok(!JSON.stringify(t.toJSON()).includes('fixed'));
+  p.setFixed(true);
+  const doc = JSON.parse(JSON.stringify(t.toJSON()));
+  assert.equal(doc.version, 6);
+  const otro = createWorkshop();
+  otro.load(doc);
+  assert.equal(otro.part(p.id).fixed, true);
+  t.undo();
+  assert.equal(p.fixed, false);
+  assert.equal(t.toJSON().version, 5);
 });

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>threejs-cad-sdk · Referencia de la API</title>
-<meta name="description" content="Referencia de la API de threejs-cad-sdk 0.8.0-rc.1: piezas, ensambles, relaciones, contacto y geometría, para apps de three.js.">
+<meta name="description" content="Referencia de la API de threejs-cad-sdk 0.8.0-rc.2: piezas, ensambles, relaciones, contacto y geometría, para apps de three.js.">
 <!-- Generado por scripts/docs.mjs desde las tablas de help(). No se edita a mano: npm run docs -->
 <style>
 :root {
@@ -89,16 +89,16 @@ footer { color: var(--muted); font-size: 13px; padding: 24px 0 0; border-top: 1p
 </head>
 <body>
 <div class="top"><div class="in">
-  <div class="marca"><b>threejs-cad-sdk</b><span class="ver">0.8.0-rc.1</span></div>
+  <div class="marca"><b>threejs-cad-sdk</b><span class="ver">0.8.0-rc.2</span></div>
   <label class="buscar"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-    <input id="q" type="search" placeholder="Buscar en 273 miembros: addPiece, contacto, bisagra…" autocomplete="off" spellcheck="false" aria-label="Buscar en la API"><kbd>/</kbd></label>
+    <input id="q" type="search" placeholder="Buscar en 275 miembros: addPiece, contacto, bisagra…" autocomplete="off" spellcheck="false" aria-label="Buscar en la API"><kbd>/</kbd></label>
   <div class="links"><a href="https://github.com/EasyIndustry/ThreeJS-cad-SDK#readme">Guía</a><a href="API.md">Markdown</a><a href="https://github.com/EasyIndustry/ThreeJS-cad-SDK/blob/main/CHANGELOG.md">Cambios</a><a href="https://github.com/EasyIndustry/ThreeJS-cad-SDK">GitHub</a></div>
 </div></div>
 <div class="wrap">
 <nav aria-label="Secciones"><ul>
 <li class="grupo">Para empezar</li><li><a href="#module" data-sec="module">Módulo<span class="n">17</span></a></li>
 <li><a href="#workshop" data-sec="workshop">Workshop<span class="n">45</span></a></li>
-<li class="grupo">Partes</li><li><a href="#part" data-sec="part">Part<span class="n">27</span></a></li>
+<li class="grupo">Partes</li><li><a href="#part" data-sec="part">Part<span class="n">29</span></a></li>
 <li><a href="#piece" data-sec="piece">Piece<span class="n">16</span></a></li>
 <li><a href="#assembly" data-sec="assembly">Assembly<span class="n">7</span></a></li>
 <li class="grupo">Relaciones</li><li><a href="#relation" data-sec="relation">Relation<span class="n">12</span></a></li>
@@ -203,9 +203,9 @@ footer { color: var(--muted); font-size: 13px; padding: 24px 0 0; border-top: 1p
 <header><p class="grupo">Para empezar</p><h2>Workshop</h2><p class="tag">el documento: crear, buscar y guardar partes</p>
 <p class="intro">Lo que devuelve <code>createWorkshop()</code>. En los ejemplos se llama <code>taller</code>, pero el nombre de la variable es de quien lo usa.</p></header>
 <div class="lista">
-<div class="m" id="workshop.addPiece" data-q="workshop el documento: crear, buscar y guardar partes addpiece({ name?, size, material?, shape?, center?, placement?, axes? }) una pieza nueva: size en la unidad del documento sobre sus ejes locales; placement (transform) la orienta al crearla; axes fuerza cual eje es el largo, el ancho y el espesor">
-<a class="sig" href="#workshop.addPiece"><code>addPiece({ name?, size, material?, shape?, center?, placement?, axes? })</code></a>
-<p class="doc">una pieza nueva: size en la unidad del documento sobre sus ejes locales; placement (Transform) la orienta al crearla; axes fuerza cuál eje es el largo, el ancho y el espesor</p>
+<div class="m" id="workshop.addPiece" data-q="workshop el documento: crear, buscar y guardar partes addpiece({ name?, size, material?, shape?, center?, placement?, axes?, fixed? }) una pieza nueva (fixed: anclada al mundo desde el principio): size en la unidad del documento sobre sus ejes locales; placement (transform) la orienta al crearla; axes fuerza cual eje es el largo, el ancho y el espesor">
+<a class="sig" href="#workshop.addPiece"><code>addPiece({ name?, size, material?, shape?, center?, placement?, axes?, fixed? })</code></a>
+<p class="doc">una pieza nueva (fixed: anclada al mundo desde el principio): size en la unidad del documento sobre sus ejes locales; placement (Transform) la orienta al crearla; axes fuerza cuál eje es el largo, el ancho y el espesor</p>
 </div>
 <div class="m" id="workshop.assemble" data-q="workshop el documento: crear, buscar y guardar partes assemble(parts, { name? }) un ensamble con esas partes hermanas; se anida, no se aplasta">
 <a class="sig" href="#workshop.assemble"><code>assemble(parts, { name? })</code></a>
@@ -271,9 +271,9 @@ footer { color: var(--muted); font-size: 13px; padding: 24px 0 0; border-top: 1p
 <a class="sig" href="#workshop.addLink"><code>addLink({ base, face, moving, gap?, meta? })</code></a>
 <p class="doc">un vínculo: la punta de moving anclada a una cara de base; una punta mueve, dos estiran</p>
 </div>
-<div class="m" id="workshop.validateLink" data-q="workshop el documento: crear, buscar y guardar partes validatelink({ base, face, moving }) ¿se puede crear ese vinculo? { ok } o { ok: false, reason: 'over-constrained' | 'cycle' | 'not-parallel' | …, message }">
+<div class="m" id="workshop.validateLink" data-q="workshop el documento: crear, buscar y guardar partes validatelink({ base, face, moving }) ¿se puede crear ese vinculo? { ok: true, end, face } (la punta que se ancla y la cara, como { localaxis, localside }) o { ok: false, reason: 'over-constrained' | 'cycle' | 'not-parallel' | 'fixed' | …, message }">
 <a class="sig" href="#workshop.validateLink"><code>validateLink({ base, face, moving })</code></a>
-<p class="doc">¿se puede crear ese vínculo? { ok } o { ok: false, reason: 'over-constrained' | 'cycle' | 'not-parallel' | …, message }</p>
+<p class="doc">¿se puede crear ese vínculo? { ok: true, end, face } (la punta que se ancla y la cara, como { localAxis, localSide }) o { ok: false, reason: 'over-constrained' | 'cycle' | 'not-parallel' | 'fixed' | …, message }</p>
 </div>
 <div class="m" id="workshop.relation" data-q="workshop el documento: crear, buscar y guardar partes relation(id) una relacion por su id (joint, fixing, link)">
 <a class="sig" href="#workshop.relation"><code>relation(id)</code></a>
@@ -465,6 +465,14 @@ footer { color: var(--muted); font-size: 13px; padding: 24px 0 0; border-top: 1p
 <div class="m" id="part.rename" data-q="part lo que tiene toda parte: piece y assembly rename(name) cambiarle el nombre">
 <a class="sig" href="#part.rename"><code>rename(name)</code></a>
 <p class="doc">cambiarle el nombre</p>
+</div>
+<div class="m" id="part.fixed" data-q="part lo que tiene toda parte: piece y assembly fixed ¿esta anclada al mundo (ella o el ensamble que la tiene)? el asentador de relaciones no la mueve; move() y transform() no lo miran">
+<a class="sig" href="#part.fixed"><code>fixed</code></a>
+<p class="doc">¿está anclada al mundo (ella o el ensamble que la tiene)? el asentador de relaciones no la mueve; move() y transform() no lo miran</p>
+</div>
+<div class="m" id="part.setFixed" data-q="part lo que tiene toda parte: piece y assembly setfixed(fixed) anclarla al mundo o soltarla; un ensamble fijo fija todo lo de adentro">
+<a class="sig" href="#part.setFixed"><code>setFixed(fixed)</code></a>
+<p class="doc">anclarla al mundo o soltarla; un ensamble fijo fija todo lo de adentro</p>
 </div>
 <div class="m" id="part.remove" data-q="part lo que tiene toda parte: piece y assembly remove() borrarla, con todo lo que cuelga de ella">
 <a class="sig" href="#part.remove"><code>remove()</code></a>

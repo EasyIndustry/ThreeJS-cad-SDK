@@ -68,6 +68,8 @@ const ctx = (p) => /** @type {Ctx} */ (ctxOf.get(p));
 const AXES = /** @type {const} */ (['x', 'y', 'z']);
 
 const AX_NAME = /** @type {const} */ (['x', 'y', 'z']);
+/** Por qué queda roto un vínculo cuya pieza es fija. */
+const AVISO_FIJA = 'la pieza es fija: el vínculo la movería';
 /** @param {{ axis: 0 | 1 | 2, side: 1 | -1 } | null} f */
 const caraLocal = (f) => (f ? { localAxis: AX_NAME[f.axis], localSide: f.side } : null);
 /** @param {Model} m @param {string} id */
@@ -375,6 +377,14 @@ export class Part {
   }
   /** @param {string} name */
   rename(name) { ctx(this).model.rename(this.id, name); return this; }
+  /**
+   * ¿Está anclada al mundo? Una parte fija no la mueve el asentador de relaciones (un vínculo
+   * contra ella no se crea, y uno que ya existe queda roto en vez de moverla). Un ensamble fijo
+   * fija todo lo de adentro. `move` y `transform` no lo miran: eso lo decide quien los llama.
+   */
+  get fixed() { return ctx(this).model.isFixed(this.id); }
+  /** Anclarla al mundo, o soltarla. Una pieza que está en un ensamble fijo sigue fija hasta soltar el ensamble. @param {boolean} fixed */
+  setFixed(fixed) { ctx(this).model.setFixed(this.id, fixed); return this; }
   /** La borra del documento, con todo lo que cuelga de ella. */
   remove() {
     const c = ctx(this);
@@ -482,6 +492,8 @@ export class Part {
     ['duplicate()', 'copia exacta en el mismo lugar, con todo lo de adentro (independiente: no sigue a la original)'],
     ['detach()', 'soltar una instancia: pasa a ser una parte de verdad, que ya no sigue a su fuente'],
     ['rename(name)', 'cambiarle el nombre'],
+    ['fixed', '¿está anclada al mundo (ella o el ensamble que la tiene)? el asentador de relaciones no la mueve; move() y transform() no lo miran'],
+    ['setFixed(fixed)', 'anclarla al mundo o soltarla; un ensamble fijo fija todo lo de adentro'],
     ['remove()', 'borrarla, con todo lo que cuelga de ella'],
     ['touches(other, { tolerance?, exact? })', '¿se toca con la otra sin meterse? (a tolerances.touch o menos). exact: con la forma real, no la caja'],
     ['intersects(other, { tolerance?, exact? })', '¿se mete en la otra? (más de tolerances.penetration)'],
@@ -1324,6 +1336,11 @@ export function createWorkshop(init = {}) {
         if (!porEje.has(k)) porEje.set(k, []);
         /** @type {RelationDef[]} */ (porEje.get(k)).push(l);
       }
+      const fija = model.isFixed(B);
+      /** Una pieza fija no se mueve: el vínculo que la movería queda roto, con su motivo. @param {RelationDef[]} anclas */
+      const frena = (anclas) => {
+        for (const l of anclas) if (model.relations.get(l.id)?.broken !== AVISO_FIJA) model.updateRelation(l.id, { broken: AVISO_FIJA });
+      };
       for (const [k, anclas] of porEje) {
         const W = model.worldFrame(B), size = model.piece(B).size;
         /** @type {[number, number, number]} */ const d = [W.r[k], W.r[3 + k], W.r[6 + k]];
@@ -1346,6 +1363,7 @@ export function createWorkshop(init = {}) {
         const corre = (/** @type {number} */ x) => /** @type {[number, number, number]} */ (d.map((v) => v * x));
         if (mas !== undefined && menos !== undefined) {
           const L = size[k] + mas - menos;
+          if (fija) { if (Math.abs(mas - menos) > eps || Math.abs(mas + menos) > eps) frena(anclas); continue; }
           if (Math.abs(mas - menos) > eps) {
             if (L < c.tolerances().minLength) throw new Error(`los vínculos de ${B} la dejarían de ${L} sobre ${AXES[k]}: menos que el mínimo (${c.tolerances().minLength})`);
             const s2 = /** @type {[number, number, number]} */ ([...size]);
@@ -1356,7 +1374,7 @@ export function createWorkshop(init = {}) {
           if (Math.abs(mas + menos) > eps) model.move(B, corre((mas + menos) / 2));
         } else {
           const delta = mas ?? menos;
-          if (delta !== undefined && Math.abs(delta) > eps) model.move(B, corre(delta));
+          if (delta !== undefined && Math.abs(delta) > eps) { if (fija) frena(anclas); else model.move(B, corre(delta)); }
         }
       }
     }
@@ -1476,10 +1494,10 @@ export function createWorkshop(init = {}) {
   /**
    * ¿Se puede crear este vínculo? Lo que diría addLink, sin crearlo.
    * @param {{ base: Part | string, face: unknown, moving: Part | string }} spec
-   * @returns {{ ok: true, end: { axis: 0 | 1 | 2, side: 1 | -1 }, face: { axis: 0 | 1 | 2, side: 1 | -1 } } | { ok: false, reason: 'invalid' | 'self' | 'not-parallel' | 'over-constrained' | 'cycle', message: string }}
+   * @returns {{ ok: true, end: { axis: 0 | 1 | 2, side: 1 | -1 }, face: { axis: 0 | 1 | 2, side: 1 | -1 } } | { ok: false, reason: 'invalid' | 'self' | 'not-parallel' | 'over-constrained' | 'cycle' | 'fixed', message: string }}
    */
   const revisarVinculo = ({ base, face, moving }) => {
-    /** @param {'invalid' | 'self' | 'not-parallel' | 'over-constrained' | 'cycle'} reason @param {string} message */
+    /** @param {'invalid' | 'self' | 'not-parallel' | 'over-constrained' | 'cycle' | 'fixed'} reason @param {string} message */
     const no = (reason, message) => /** @type {const} */ ({ ok: false, reason, message });
     let A, B, f;
     try {
@@ -1491,6 +1509,7 @@ export function createWorkshop(init = {}) {
     }
     if (f.piece && f.piece !== A) return no('invalid', `esa cara es de ${f.piece}, no de la base ${A}`);
     if (A === B) return no('self', `${A} no se puede anclar a sí misma`);
+    if (model.isFixed(B)) return no('fixed', `${B} es fija: un vínculo la movería`);
     const { n } = caraEnElMundo(A, f.axis, f.side);
     const W = model.worldFrame(B);
     const k = /** @type {(0 | 1 | 2)[]} */ ([0, 1, 2]).find((i) => Math.abs(W.r[i] * n[0] + W.r[3 + i] * n[1] + W.r[6 + i] * n[2]) >= PARALELO);
@@ -1543,19 +1562,21 @@ export function createWorkshop(init = {}) {
     Point3d, Vector3d, Line, BoundingBox, Face, Transform, Contact, Intersection, Mesh,
     /**
      * Una pieza nueva.
-     * @param {{ name?: string, size: PointLike, material?: string, shape?: object | null,
+     *   fixed: anclada al mundo desde el principio (ver `fixed` de las partes).
+     * @param {{ name?: string, fixed?: boolean, size: PointLike, material?: string, shape?: object | null,
      *           center?: PointLike, placement?: Transform, axes?: { length: 0|1|2, width: 0|1|2, thickness: 0|1|2 } }} spec
      *   size: largo de cada eje local, en la unidad del documento. center: dónde queda su centro (el origen si no se dice).
      *   placement: la orienta al crearla, en vez de crearla derecha y girarla después (p. ej.
      *   `Transform.fromEuler([rx, ry, rz])`, para importar un diseño que guarda Euler).
      *   axes: cuál eje local es el largo, el ancho y el espesor; por tamaño si no se dice.
      */
-    addPiece({ name, size, material, shape, center = [0, 0, 0], placement, axes }) {
+    addPiece({ name, size, material, shape, center = [0, 0, 0], placement, axes, fixed = false }) {
       const id = model.addPiece({
         name, size: vec3(size, 'medidas'), material, shape: checkSection(shape, vec3(size, 'medidas')), at: vec3(center, 'centro'),
         r: placement ? Transform.check(placement).frame.r : undefined,
         axes,
       });
+      if (fixed) model.setFixed(id, true);
       return /** @type {Piece} */ (c.part(id));
     },
     /**
@@ -1790,13 +1811,17 @@ export function createWorkshop(init = {}) {
       return /** @type {Link} */ (c.relation(id));
     },
     /**
-     * ¿Se puede crear este vínculo? { ok: true } o { ok: false, reason, message }; reason es
-     * 'over-constrained', 'cycle', 'not-parallel', 'self' o 'invalid'.
+     * ¿Se puede crear este vínculo? { ok: true, end, face } o { ok: false, reason, message }. `end`
+     * es la punta de `moving` que quedaría anclada y `face` la cara de la base, los dos como
+     * { localAxis, localSide } (igual que `link.end` y `link.face` una vez creado). `reason` es
+     * 'over-constrained', 'cycle', 'not-parallel', 'fixed', 'self' o 'invalid'.
      * @param {{ base: Part | string, face: unknown, moving: Part | string }} spec
      */
     validateLink(spec) {
       const v = revisarVinculo(spec);
-      return Object.freeze(v.ok ? { ok: true } : { ok: false, reason: v.reason, message: v.message });
+      return Object.freeze(v.ok
+        ? { ok: true, end: Object.freeze(caraLocal(v.end)), face: Object.freeze(caraLocal(v.face)) }
+        : { ok: false, reason: v.reason, message: v.message });
     },
     /** Una relación por su id (también una de adentro de una instancia). @param {string} id */
     relation(id) { return c.relation(id); },
@@ -1870,7 +1895,7 @@ export function createWorkshop(init = {}) {
 
 /** @type {Member[]} */
 export const WORKSHOP_MEMBERS = [
-  ['addPiece({ name?, size, material?, shape?, center?, placement?, axes? })', 'una pieza nueva: size en la unidad del documento sobre sus ejes locales; placement (Transform) la orienta al crearla; axes fuerza cuál eje es el largo, el ancho y el espesor'],
+  ['addPiece({ name?, size, material?, shape?, center?, placement?, axes?, fixed? })', 'una pieza nueva (fixed: anclada al mundo desde el principio): size en la unidad del documento sobre sus ejes locales; placement (Transform) la orienta al crearla; axes fuerza cuál eje es el largo, el ancho y el espesor'],
   ['assemble(parts, { name? })', 'un ensamble con esas partes hermanas; se anida, no se aplasta'],
   ['instantiate(part, { name?, parent?, placement? })', 'una instancia: la misma parte colocada otra vez; editar la fuente cambia todas'],
   ['array(part, spec)', "repetir una parte en línea, en área o alrededor de un eje: crea instancias (ver arrayTransforms)"],
@@ -1887,7 +1912,7 @@ export const WORKSHOP_MEMBERS = [
   ['slideCandidates(moving, base)', 'las direcciones en que la móvil corre sin chocar con la base; cada una va directo a addJoint'],
   ['addFixing({ a, b, points?, count?, holes?, policy?, meta? })', 'una unión entre dos piezas que se tocan: puntos normalizados en el parche, agujeros en las dos'],
   ['addLink({ base, face, moving, gap?, meta? })', 'un vínculo: la punta de moving anclada a una cara de base; una punta mueve, dos estiran'],
-  ['validateLink({ base, face, moving })', "¿se puede crear ese vínculo? { ok } o { ok: false, reason: 'over-constrained' | 'cycle' | 'not-parallel' | …, message }"],
+  ['validateLink({ base, face, moving })', "¿se puede crear ese vínculo? { ok: true, end, face } (la punta que se ancla y la cara, como { localAxis, localSide }) o { ok: false, reason: 'over-constrained' | 'cycle' | 'not-parallel' | 'fixed' | …, message }"],
   ['relation(id)', 'una relación por su id (Joint, Fixing, Link)'],
   ['relations({ kind?, part? })', 'las relaciones del documento, con las de adentro de las instancias'],
   ['cutList({ groupBy? })', 'el despiece: { stock, material, length, width, thickness, count, ids, fixings } por grupo de piezas idénticas'],

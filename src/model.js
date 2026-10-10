@@ -62,6 +62,7 @@ import { checkShape } from './sections.js';
  * @property {import('./sections.js').Shape | null} shape  forma del bruto (perfil, torneado), o null si es una caja
  * @property {Operation[]} [operations]  lo que se le hace al bruto, en orden (ver solid.js)
  * @property {string} [source]   solo en lo que sale de una instancia: la parte de la que es copia
+ * @property {true} [fixed]      anclada al mundo: el asentador de relaciones no la mueve (solo si es true)
  */
 /**
  * @typedef {Object} AssemblyDef
@@ -72,6 +73,7 @@ import { checkShape } from './sections.js';
  * @property {Frame} frame
  * @property {string[]} children
  * @property {string} [source]   solo en lo que sale de una instancia: la parte de la que es copia
+ * @property {true} [fixed]      anclado al mundo, con todo lo que tiene adentro (solo si es true)
  */
 /**
  * Lo que se guarda de una instancia: de quién es copia (siempre una pieza o un ensamble
@@ -83,6 +85,7 @@ import { checkShape } from './sections.js';
  * @property {string | null} parent
  * @property {Frame} frame
  * @property {string} source
+ * @property {true} [fixed]      anclada al mundo (solo si es true)
  */
 /** Lo que se ve de una parte: una pieza o un ensamble (una instancia se ve como lo que copia). @typedef {PieceDef | AssemblyDef} PartDef */
 /** Lo que se guarda. @typedef {PieceDef | AssemblyDef | InstanceDef} StoredPart */
@@ -132,8 +135,10 @@ function deepFreeze(o) {
  * La versión del formato de `toJSON()`. Sube cuando un documento guardado trae algo que una
  * versión anterior del SDK perdería sin darse cuenta; `load` rechaza las que son más nuevas.
  *   1: partes y ensambles · 2: instancias · 3: unidad · 4: operaciones de las piezas · 5: relaciones
+ *   6: partes fijas (`fixed`): solo la lleva un documento que tiene alguna, así que uno sin partes
+ *      fijas sigue saliendo como 5 y lo lee cualquier versión que lea 5
  */
-const VERSION_DOCUMENTO = 5;
+const VERSION_DOCUMENTO = 6;
 
 const PREFIJO = /** @type {const} */ ({ piece: 'P', assembly: 'E', instance: 'I', relation: 'R' });
 
@@ -1038,6 +1043,27 @@ export class Model {
     });
   }
 
+  /**
+   * Ancla una parte al mundo (o la suelta). Una parte fija no la mueve el asentador de relaciones;
+   * lo demás (`move`, `transform`) lo decide quien llama. Un ensamble fijo fija todo lo de adentro.
+   * @param {string} id @param {boolean} fixed
+   */
+  setFixed(id, fixed) {
+    if (typeof fixed !== 'boolean') throw new TypeError(`fixed inválido: ${String(fixed)} (va true o false)`);
+    this.#paso(() => {
+      const p = { ...this.own(id) };
+      if (fixed) p.fixed = true; else delete p.fixed;
+      this.#put(/** @type {StoredPart} */ (p));
+      this.emit('fixed', [id]);
+    });
+  }
+
+  /** ¿Es fija, o está adentro de un ensamble fijo? @param {string} id */
+  isFixed(id) {
+    for (let p = this.parts.get(id); p; p = p.parent ? this.parts.get(p.parent) : undefined) if (p.fixed) return true;
+    return false;
+  }
+
   /** @param {string} id @param {string} material */
   setMaterial(id, material) {
     this.#paso(() => {
@@ -1377,7 +1403,7 @@ export class Model {
 
   toJSON() {
     return {
-      version: VERSION_DOCUMENTO, units: this.units, counters: { ...this.counters },
+      version: [...this.parts.values()].some((p) => p.fixed) ? VERSION_DOCUMENTO : 5, units: this.units, counters: { ...this.counters },
       parts: [...this.parts.values()].map(clone), relations: [...this.relations.values()].map(clone),
     };
   }

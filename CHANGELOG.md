@@ -5,6 +5,27 @@ según [SemVer](https://semver.org): mientras sea `0.x`, una versión menor pued
 y si rompe queda dicho arriba de todo en esa entrada. Los pre-releases (`-rc.N`) se prueban
 en una app antes del release (ver `CONTRIBUTING.md`).
 
+## [0.8.0-rc.2] - 2026-10-10
+
+Dos pedidos más de la app (CAD-5 y CAD-6 en Denis). Todo suma; nada rompe.
+
+### Agregado
+
+- **Partes fijas.** `part.fixed` (¿está anclada al mundo?), `part.setFixed(bool)` y
+  `addPiece({ fixed })`. El asentador de relaciones no mueve una parte fija: `validateLink` y
+  `addLink` rechazan un vínculo cuya `moving` es fija (`reason: 'fixed'`), y un vínculo que ya
+  existía queda roto (`link.broken`) en vez de moverla; al soltarla, el vínculo la lleva a su lugar.
+  Un ensamble fijo fija todo lo de adentro. `move()` y `transform()` no lo miran: eso lo decide quien
+  los llama. (CAD-6)
+- **Formato del documento:** un documento con partes fijas sale como versión 6; uno sin ninguna
+  sigue saliendo como 5, así que lo lee cualquier versión que lea 5.
+
+### Cambiado
+
+- **`validateLink` devuelve la punta que se ancla:** `{ ok: true, end, face }`, los dos como
+  `{ localAxis, localSide }` (igual que `link.end` y `link.face` del vínculo ya creado). Antes
+  devolvía solo `{ ok: true }`: lo que leía `ok` sigue andando. (CAD-5)
+
 ## [0.8.0-rc.1] - 2026-10-10
 
 Cuatro pedidos de una app (CAD-1 a CAD-4 en Denis). Todo suma; nada rompe.

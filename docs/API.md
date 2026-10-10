@@ -1,4 +1,4 @@
-# Referencia de la API — threejs-cad-sdk 0.8.0-rc.1
+# Referencia de la API — threejs-cad-sdk 0.8.0-rc.2
 
 > Generada por `scripts/docs.mjs` desde las tablas de `help()`, que una prueba verifica contra el código. No se edita a mano: `npm run docs`.
 > Para entender cómo se usa cada cosa, el [README](https://github.com/EasyIndustry/ThreeJS-cad-SDK#readme). Para buscar, la [versión con buscador](index.html).
@@ -80,7 +80,7 @@ Lo que devuelve `createWorkshop()`. En los ejemplos se llama `taller`, pero el n
 
 | Miembro | Qué hace |
 |---|---|
-| `addPiece({ name?, size, material?, shape?, center?, placement?, axes? })` | una pieza nueva: size en la unidad del documento sobre sus ejes locales; placement (Transform) la orienta al crearla; axes fuerza cuál eje es el largo, el ancho y el espesor |
+| `addPiece({ name?, size, material?, shape?, center?, placement?, axes?, fixed? })` | una pieza nueva (fixed: anclada al mundo desde el principio): size en la unidad del documento sobre sus ejes locales; placement (Transform) la orienta al crearla; axes fuerza cuál eje es el largo, el ancho y el espesor |
 | `assemble(parts, { name? })` | un ensamble con esas partes hermanas; se anida, no se aplasta |
 | `instantiate(part, { name?, parent?, placement? })` | una instancia: la misma parte colocada otra vez; editar la fuente cambia todas |
 | `array(part, spec)` | repetir una parte en línea, en área o alrededor de un eje: crea instancias (ver arrayTransforms) |
@@ -97,7 +97,7 @@ Lo que devuelve `createWorkshop()`. En los ejemplos se llama `taller`, pero el n
 | `slideCandidates(moving, base)` | las direcciones en que la móvil corre sin chocar con la base; cada una va directo a addJoint |
 | `addFixing({ a, b, points?, count?, holes?, policy?, meta? })` | una unión entre dos piezas que se tocan: puntos normalizados en el parche, agujeros en las dos |
 | `addLink({ base, face, moving, gap?, meta? })` | un vínculo: la punta de moving anclada a una cara de base; una punta mueve, dos estiran |
-| `validateLink({ base, face, moving })` | ¿se puede crear ese vínculo? { ok } o { ok: false, reason: 'over-constrained' \| 'cycle' \| 'not-parallel' \| …, message } |
+| `validateLink({ base, face, moving })` | ¿se puede crear ese vínculo? { ok: true, end, face } (la punta que se ancla y la cara, como { localAxis, localSide }) o { ok: false, reason: 'over-constrained' \| 'cycle' \| 'not-parallel' \| 'fixed' \| …, message } |
 | `relation(id)` | una relación por su id (Joint, Fixing, Link) |
 | `relations({ kind?, part? })` | las relaciones del documento, con las de adentro de las instancias |
 | `cutList({ groupBy? })` | el despiece: { stock, material, length, width, thickness, count, ids, fixings } por grupo de piezas idénticas |
@@ -155,6 +155,8 @@ Identidad, colocación, geometría consultable y los verbos. La geometría se le
 | `duplicate()` | copia exacta en el mismo lugar, con todo lo de adentro (independiente: no sigue a la original) |
 | `detach()` | soltar una instancia: pasa a ser una parte de verdad, que ya no sigue a su fuente |
 | `rename(name)` | cambiarle el nombre |
+| `fixed` | ¿está anclada al mundo (ella o el ensamble que la tiene)? el asentador de relaciones no la mueve; move() y transform() no lo miran |
+| `setFixed(fixed)` | anclarla al mundo o soltarla; un ensamble fijo fija todo lo de adentro |
 | `remove()` | borrarla, con todo lo que cuelga de ella |
 | `touches(other, { tolerance?, exact? })` | ¿se toca con la otra sin meterse? (a tolerances.touch o menos). exact: con la forma real, no la caja |
 | `intersects(other, { tolerance?, exact? })` | ¿se mete en la otra? (más de tolerances.penetration) |
