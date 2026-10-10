@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Política del repositorio
+    url: https://github.com/EasyIndustry/ThreeJS-cad-SDK/blob/main/POLITICA.md
+    about: Qué entra al SDK y cómo se evalúa un pedido.
+  - name: Seguridad
+    url: https://github.com/EasyIndustry/ThreeJS-cad-SDK/security/advisories/new
+    about: Un problema de seguridad se reporta en privado, no en un issue.
