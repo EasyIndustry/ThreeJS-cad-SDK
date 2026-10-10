@@ -83,35 +83,32 @@ frena si eso cambia: el núcleo lo puede usar un servidor.
 
 ## Ramas, pre-releases y releases
 
-- **`main`** solo tiene lo publicado: cada commit de `main` con tag `vX.Y.Z` es un release.
-- **`test`** es lo que se está probando en una app antes de publicarlo. El trabajo se hace en
-  ramas propias y, cuando algo está listo para probar, `test` avanza a ese commit.
-- **Pre-release `vX.Y.Z-rc.N`** sobre un commit de `test`: es lo que una app vendoriza para
-  probar. Cada issue que entra suma un rc (`-rc.2`, `-rc.3`…), o abre la versión siguiente.
-- **Release `vX.Y.Z`** sale de `main`, cuando el último rc anduvo bien en la app.
+**Hasta la 1.0, todo pasa por `test`.** `main` solo se actualiza para la 1.0 (y para la política del
+repo y lo que no es código); mientras tanto no hay PR de `test` a `main` ni release sin `-rc`.
+
+- **`test`** es la rama de trabajo y de lo que se prueba en una app. El trabajo se hace en ramas
+  propias y se mergea a `test` (con merge commit, nunca squash: los tags tienen que seguir
+  apuntando a commits de `test`).
+- **Pre-release `vX.Y.Z-rc.N`** sobre un commit de `test`: es lo que una app vendoriza. Cada issue
+  que entra suma un rc (`-rc.2`, `-rc.3`…), o abre la versión siguiente (`0.9.0-rc.1`).
+- **La serie arranca en `0.8.0-rc.1`.** `v0.7.0` queda como está (la 0.7.0 nunca tuvo etiqueta).
+- **1.0:** recién ahí `test` pasa a `main` (PR con merge commit), con su commit de release y
+  `gh release create v1.0.0`.
 
 ### Publicar un pre-release
 
-1. `package.json` dice la versión del rc (`0.6.0-rc.1`), `CHANGELOG.md` tiene su entrada
+1. `package.json` dice la versión del rc (`0.8.0-rc.1`), `CHANGELOG.md` tiene su entrada
    (lo que rompe, arriba de todo) y `npm run docs` está corrido.
 2. `test` apunta a ese commit.
 3. ```bash
-   gh release create v0.6.0-rc.1 --prerelease --target <sha completo> --title v0.6.0-rc.1 --notes-file <notas>
+   gh release create v0.8.0-rc.1 --prerelease --target <sha completo> --title v0.8.0-rc.1 --notes-file <notas>
    ```
    `--target` necesita el SHA de 40 caracteres: con uno abreviado, GitHub contesta
    "target_commitish is invalid".
-
-### Publicar un release
-
-1. PR de `test` a `main`, mergeado **con merge commit o fast-forward, nunca squash**: los tags
-   de los rc tienen que seguir apuntando a commits que estén en `main`.
-2. En `main`, un commit de release: `package.json` pasa a `X.Y.Z` (sin `-rc.N`), la entrada
-   del CHANGELOG toma la fecha del release y `npm run docs` (la referencia dice la versión).
-3. `gh release create vX.Y.Z --target <sha completo del commit de release> --notes-file <notas>`.
 
 ### La referencia en GitHub Pages
 
 `docs/` se publica con GitHub Pages desde `main` (Settings → Pages → Deploy from a branch →
 `main`, carpeta `/docs`), en https://easyindustry.github.io/ThreeJS-cad-SDK/. Como sale de
-`main`, muestra la API del último release, no la de lo que se está probando en `test`.
+`main`, hasta la 1.0 muestra la API de la 0.7.0; la de `test` está en `docs/` de esa rama.
 
